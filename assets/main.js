@@ -1,16 +1,17 @@
-// assets/main.js - Control del frontend para AnimePulse
+// assets/main.js - Gestión de interfaz, búsqueda y paginación para AnimePulse
 
 let noticiasVisibles = 6;
 const NOTICIAS_POR_PAGINA = 6;
 let categoriaSeleccionada = 'TODAS';
 
+// Se ejecuta al cargar por completo la página web
 document.addEventListener('DOMContentLoaded', () => {
     inicializarProgresoLectura();
-    ejecutarFiltro(); // Carga las noticias guardadas al iniciar la página
+    ejecutarFiltro(); // Evalúa y muestra las noticias disponibles inmediatamente
 });
 
 /**
- * Calcula el avance de la lectura en páginas de artículos individuales.
+ * Controla la barra de progreso de lectura en páginas de artículo.
  */
 function inicializarProgresoLectura() {
     const progressBar = document.getElementById('progress-bar');
@@ -25,7 +26,7 @@ function inicializarProgresoLectura() {
 }
 
 /**
- * Permite copiar el enlace de la noticia al portapapeles del usuario.
+ * Copia la dirección web del artículo al portapapeles.
  */
 function copiarEnlace() {
     navigator.clipboard.writeText(window.location.href);
@@ -37,13 +38,12 @@ function copiarEnlace() {
 }
 
 /**
- * Filtra las noticias según la categoría seleccionada por el usuario.
- * @param {string} categoria - Categoría a filtrar (ej. 'SHONEN', 'MANGA', 'TODAS').
+ * Filtra por categoría (chips) y actualiza la vista.
+ * @param {string} categoria - Categoría seleccionada (ej: 'SHONEN', 'TODAS')
  */
 function filtrarPorCategoria(categoria) {
     categoriaSeleccionada = categoria.toUpperCase();
     
-    // Actualizar apariencia visual de los botones (chips)
     const botones = document.querySelectorAll('.chip-categoria');
     botones.forEach(btn => {
         const btnCat = btn.getAttribute('data-categoria') ? btn.getAttribute('data-categoria').toUpperCase() : '';
@@ -60,7 +60,7 @@ function filtrarPorCategoria(categoria) {
 }
 
 /**
- * Realiza la búsqueda por texto y categoría sobre todas las tarjetas presentes.
+ * Filtra las noticias en tiempo real. Si el cuadro está vacío, muestra todas las noticias.
  */
 function ejecutarFiltro() {
     const buscador = document.getElementById('buscador');
@@ -69,12 +69,15 @@ function ejecutarFiltro() {
     let encontradas = 0;
 
     tarjetas.forEach(tarjeta => {
-        // Obtener el texto del título dentro de la tarjeta
         const tituloElem = tarjeta.querySelector('.titulo-noticia') || tarjeta.querySelector('h2');
+        const descElem = tarjeta.querySelector('p');
+        
         const titulo = tituloElem ? tituloElem.innerText.toLowerCase() : '';
+        const descripcion = descElem ? descElem.innerText.toLowerCase() : '';
         const categoria = tarjeta.getAttribute('data-categoria') ? tarjeta.getAttribute('data-categoria').toUpperCase() : '';
 
-        const coincideTexto = inputTexto === '' || titulo.includes(inputTexto);
+        // Si inputTexto está vacío (""), coincideTexto será verdadero para todas
+        const coincideTexto = (inputTexto === '') || titulo.includes(inputTexto) || descripcion.includes(inputTexto);
         const coincideCategoria = (categoriaSeleccionada === 'TODAS') || (categoria === categoriaSeleccionada);
 
         if (coincideTexto && coincideCategoria) {
@@ -85,7 +88,7 @@ function ejecutarFiltro() {
         }
     });
 
-    // Mostrar el contenedor de "Sin resultados" solo si la búsqueda no arroja coincidencias
+    // Control del aviso de no resultados
     const noResultados = document.getElementById('no-resultados');
     if (noResultados) {
         if (encontradas === 0) {
@@ -101,8 +104,8 @@ function ejecutarFiltro() {
 }
 
 /**
- * Controla la paginación con el botón "Cargar más noticias".
- * @param {boolean} reset - Si es verdadero, reinicia el límite visual a 6 noticias.
+ * Administra la paginación de la cuadrícula mediante el botón "Cargar más".
+ * @param {boolean} reset - Reinicia el límite visual a 6 elementos.
  */
 function inicializarPaginacion(reset = false) {
     if (reset) noticiasVisibles = NOTICIAS_POR_PAGINA;
@@ -133,7 +136,7 @@ function inicializarPaginacion(reset = false) {
 }
 
 /**
- * Incrementa las noticias a mostrar al hacer clic en el botón de paginación.
+ * Incrementa las tarjetas mostradas en pantalla al hacer clic.
  */
 function cargarMasNoticias() {
     noticiasVisibles += NOTICIAS_POR_PAGINA;
