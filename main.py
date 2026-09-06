@@ -11,6 +11,9 @@ import markdown
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configuración de Logging Estructurado
 logging.basicConfig(
