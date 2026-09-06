@@ -1,0 +1,10 @@
+{
+  "dominio_base": "https://tu-dominio.com/",
+  "max_noticias_por_feed": 5,
+  "max_historial_registros": 200,
+  "imagen_placeholder": "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop",
+  "feeds_rss": [
+    "https://www.animenewsnetwork.com/all/rss.xml?ann-format=rail",
+    "https://somoskudasai.com/feed/"
+  ]
+}

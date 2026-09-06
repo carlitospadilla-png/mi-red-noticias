@@ -1,2 +1,5 @@
 google-genai
 feedparser
+beautifulsoup4
+markdown
+tenacity
