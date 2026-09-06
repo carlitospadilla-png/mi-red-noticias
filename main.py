@@ -33,7 +33,7 @@ HISTORIAL_FILE = "noticias.json"
 INDICE_FILE = "noticias_index.json"
 CARPETA_NOTICIAS = "noticias"
 ARCHIVO_SITEMAP = "sitemap.xml"
-ARCHIVO_ROBOTS = "robots"
+ARCHIVO_ROBOTS = "robots.txt"
 LIMITE_INDEX = 30
 NOTICIAS_POR_FEED = 5
 IMAGEN_PLACEHOLDER = "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop"

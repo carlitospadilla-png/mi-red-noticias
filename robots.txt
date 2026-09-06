@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://carlitospadilla-png.github.io/mi-red-noticias/sitemap.xml
