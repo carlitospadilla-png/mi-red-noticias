@@ -10,6 +10,7 @@ from urllib.parse import urljoin
 import feedparser
 from bs4 import BeautifulSoup
 import markdown
+import bleach
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
 from google.genai import types
@@ -36,6 +37,8 @@ CONFIG = cargar_configuracion()
 DOMINIO_BASE = CONFIG["dominio_base"]
 HISTORIAL_FILE = "noticias.json"
 CARPETA_NOTICIAS = "noticias"
+TAGS_PERMITIDOS = ['p', 'h2', 'h3', 'strong', 'em', 'ul', 'ol', 'li', 'a', 'blockquote', 'br']
+ATRIBUTOS_PERMITIDOS = {'a': ['href', 'title', 'rel']}
 
 def cargar_noticias_db():
     if os.path.exists(HISTORIAL_FILE):
@@ -110,6 +113,12 @@ def generar_html_noticia(item):
 
     # Renderizado robusto de Markdown a HTML
     contenido_html = markdown.markdown(item["contenido_markdown"])
+    contenido_html = bleach.clean(
+        contenido_html,
+        tags=TAGS_PERMITIDOS,
+        attributes=ATRIBUTOS_PERMITIDOS,
+        strip=True
+    )
 
     titulo = escape(str(item.get('titulo_seo', 'Noticia de anime')), quote=True)
     meta_descripcion = escape(str(item.get('meta_descripcion', '')), quote=True)
