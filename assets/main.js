@@ -4,6 +4,14 @@ let noticiasVisibles = 6;
 const NOTICIAS_POR_PAGINA = 6;
 let categoriaSeleccionada = 'TODAS';
 
+// Compara categorias ignorando mayusculas y tildes.
+function normalizarCategoria(valor) {
+    return String(valor || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase();
+}
+
 // Se ejecuta al cargar por completo la página web
 document.addEventListener('DOMContentLoaded', () => {
     inicializarProgresoLectura();
@@ -42,11 +50,11 @@ function copiarEnlace() {
  * @param {string} categoria - Categoría seleccionada (ej: 'SHONEN', 'TODAS')
  */
 function filtrarPorCategoria(categoria) {
-    categoriaSeleccionada = categoria.toUpperCase();
+    categoriaSeleccionada = normalizarCategoria(categoria);
     
     const botones = document.querySelectorAll('.chip-categoria');
     botones.forEach(btn => {
-        const btnCat = btn.getAttribute('data-categoria') ? btn.getAttribute('data-categoria').toUpperCase() : '';
+        const btnCat = normalizarCategoria(btn.getAttribute('data-categoria'));
         if (btnCat === categoriaSeleccionada) {
             btn.classList.add('bg-purple-600', 'text-white');
             btn.classList.remove('bg-slate-800', 'text-slate-400');
@@ -74,7 +82,7 @@ function ejecutarFiltro() {
         
         const titulo = tituloElem ? tituloElem.innerText.toLowerCase() : '';
         const descripcion = descElem ? descElem.innerText.toLowerCase() : '';
-        const categoria = tarjeta.getAttribute('data-categoria') ? tarjeta.getAttribute('data-categoria').toUpperCase() : '';
+        const categoria = normalizarCategoria(tarjeta.getAttribute('data-categoria'));
 
         // Si inputTexto está vacío (""), coincideTexto será verdadero para todas
         const coincideTexto = (inputTexto === '') || titulo.includes(inputTexto) || descripcion.includes(inputTexto);

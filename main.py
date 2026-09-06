@@ -8,7 +8,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from html import escape
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import urljoin
 
 import bleach
 import feedparser
@@ -29,7 +29,6 @@ logging.basicConfig(
 )
 
 # Configuracion principal del sitio.
-DOMINIO_BASE = "https://carlitospadilla-png.github.io/mi-red-noticias/"
 HISTORIAL_FILE = "noticias.json"
 INDICE_FILE = "noticias_index.json"
 CARPETA_NOTICIAS = "noticias"
@@ -38,6 +37,13 @@ ARCHIVO_ROBOTS = "robots"
 LIMITE_INDEX = 30
 NOTICIAS_POR_FEED = 5
 IMAGEN_PLACEHOLDER = "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop"
+IMAGENES_TEMATICAS = {
+    'anime': 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop',
+    'mecha': 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=800&auto=format&fit=crop',
+    'manga': 'https://images.unsplash.com/photo-1613376023733-0a73315d9b06?q=80&w=800&auto=format&fit=crop',
+    'peliculas': 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=800&auto=format&fit=crop',
+    'industria': 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=800&auto=format&fit=crop',
+}
 TAGS_PERMITIDOS = ['p', 'h2', 'h3', 'strong', 'em', 'ul', 'ol', 'li', 'a', 'blockquote', 'br']
 ATRIBUTOS_PERMITIDOS = {'a': ['href', 'title', 'rel']}
 
@@ -52,6 +58,7 @@ def cargar_configuracion():
 
 
 CONFIG = cargar_configuracion()
+DOMINIO_BASE = CONFIG.get("dominio_base", "https://carlitospadilla-png.github.io/mi-red-noticias/")
 IMAGEN_PLACEHOLDER = CONFIG.get("imagen_placeholder", IMAGEN_PLACEHOLDER)
 
 
@@ -138,9 +145,13 @@ def extraer_imagen_rss(entry):
 
 
 def construir_imagen_tematica(imagen_keywords):
-    """Construye una URL tematica cuando el RSS no aporta una imagen."""
-    keywords = str(imagen_keywords or 'anime manga').strip() or 'anime manga'
-    return f"https://source.unsplash.com/featured/800x450/?{quote_plus(keywords)}"
+    """Elige una imagen estatica publica cuando el RSS no aporta una imagen."""
+    palabras = slugify(imagen_keywords or 'anime')
+    for categoria, imagen_url in IMAGENES_TEMATICAS.items():
+        if categoria in palabras:
+            return imagen_url
+    indice = sum(ord(caracter) for caracter in palabras) % len(IMAGENES_TEMATICAS)
+    return list(IMAGENES_TEMATICAS.values())[indice]
 
 
 def extraer_fecha_entry(entry):
@@ -331,7 +342,7 @@ def actualizar_index():
     index_html = f"""<!DOCTYPE html>
 <html lang="es" class="dark"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AnimePulse - Noticias de Anime & Manga al Instante</title><meta name="description" content="Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga."><link rel="canonical" href="{dominio_html}"><link rel="icon" href="/favicon.ico"><meta property="og:type" content="website"><meta property="og:title" content="AnimePulse - Noticias de Anime & Manga al Instante"><meta property="og:description" content="Últimas novedades, estrenos y tendencias del mundo del anime y manga."><meta property="og:url" content="{dominio_html}"><meta property="og:site_name" content="AnimePulse"><meta property="og:image" content="{placeholder_html}"><script src="https://cdn.tailwindcss.com"></script><script src="assets/main.js" defer></script><style>.oculta-busqueda, .oculta-categoria, .oculta-paginacion {{ display: none !important; }}</style></head>
 <body class="bg-slate-950 text-slate-200 font-sans min-h-screen flex flex-col antialiased"><header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40"><div class="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row justify-between items-center gap-4"><a href="index.html" class="text-3xl font-black bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">ANIME<span class="text-white">PULSE</span></a><div class="relative w-full sm:w-72"><input type="text" id="buscador" onkeyup="ejecutarFiltro()" placeholder="Buscar por título o descripción..." aria-label="Buscar noticias" class="w-full bg-slate-950 text-slate-200 text-sm pl-4 pr-4 py-2 rounded-lg border border-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"></div></div></header>
-<section class="bg-gradient-to-b from-purple-900/20 to-transparent border-b border-slate-800/50 py-10 px-4 text-center"><div class="max-w-4xl mx-auto"><h1 class="text-3xl md:text-5xl font-black text-white mb-3">Noticias de Anime & Manga</h1><p class="text-slate-400 text-sm md:text-base mb-6">Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.</p><div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto"><button onclick="filtrarPorCategoria('TODAS')" data-categoria="TODAS" class="chip-categoria bg-purple-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">TODAS</button><button onclick="filtrarPorCategoria('SHONEN')" data-categoria="SHONEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">SHONEN</button><button onclick="filtrarPorCategoria('SEINEN')" data-categoria="SEINEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">SEINEN</button><button onclick="filtrarPorCategoria('MANGA')" data-categoria="MANGA" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">MANGA</button><button onclick="filtrarPorCategoria('PELÍCULAS')" data-categoria="PELÍCULAS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">PELÍCULAS</button><button onclick="filtrarPorCategoria('ESTRENOS')" data-categoria="ESTRENOS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">ESTRENOS</button></div></div></section>
+<section class="bg-gradient-to-b from-purple-900/20 to-transparent border-b border-slate-800/50 py-10 px-4 text-center"><div class="max-w-4xl mx-auto"><h1 class="text-3xl md:text-5xl font-black text-white mb-3">Noticias de Anime & Manga</h1><p class="text-slate-400 text-sm md:text-base mb-6">Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.</p><div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto"><button onclick="filtrarPorCategoria('TODAS')" data-categoria="TODAS" class="chip-categoria bg-purple-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">TODAS</button><button onclick="filtrarPorCategoria('SHONEN')" data-categoria="SHONEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">SHONEN</button><button onclick="filtrarPorCategoria('SEINEN')" data-categoria="SEINEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">SEINEN</button><button onclick="filtrarPorCategoria('MANGA')" data-categoria="MANGA" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">MANGA</button><button onclick="filtrarPorCategoria('PELÍCULAS')" data-categoria="PELÍCULAS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">PELÍCULAS</button><button onclick="filtrarPorCategoria('ESTRENOS')" data-categoria="ESTRENOS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">ESTRENOS</button><button onclick="filtrarPorCategoria('INDUSTRIA')" data-categoria="INDUSTRIA" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">INDUSTRIA</button></div></div></section>
 <main class="max-w-6xl mx-auto my-10 px-4 flex-grow w-full"><div id="grid-noticias" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{tarjetas_html}</div><div id="no-resultados" class="hidden text-center py-16"><p class="text-slate-400 text-lg font-semibold" role="status">No se encontraron noticias que coincidan con la búsqueda.</p></div><div class="text-center mt-10"><button id="btn-cargar-mas" type="button" onclick="cargarMasNoticias()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-lg shadow-lg">Cargar más noticias</button></div></main><footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-8 text-sm mt-auto"><p>&copy; {datetime.now().year} AnimePulse. Todos los derechos reservados.</p></footer></body></html>"""
     with open("index.html", "w", encoding="utf-8") as archivo:
         archivo.write(index_html)
