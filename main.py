@@ -70,8 +70,16 @@ def extraer_imagen_rss(entry):
         return entry.media_content[0].get('url')
     if 'media_thumbnail' in entry and len(entry.media_thumbnail) > 0:
         return entry.media_thumbnail[0].get('url')
-    
-    # 2. Buscar etiquetas <img> dentro del contenido HTML/Summary
+
+    # 2. Enclosures, comunes en algunos feeds RSS
+    if 'enclosures' in entry and len(entry.enclosures) > 0:
+        for enclosure in entry.enclosures:
+            tipo = enclosure.get('type', '')
+            url_enclosure = enclosure.get('href') or enclosure.get('url')
+            if tipo.startswith('image') and url_enclosure:
+                return url_enclosure
+
+    # 3. Buscar etiquetas <img> dentro del contenido HTML/Summary
     contenido = getattr(entry, 'summary', '') or getattr(entry, 'description', '')
     if contenido:
         soup = BeautifulSoup(contenido, 'html.parser')
@@ -79,7 +87,7 @@ def extraer_imagen_rss(entry):
         if img and img.get('src'):
             return img['src']
 
-    # 3. Imagen fallback
+    # 4. Imagen fallback
     return CONFIG.get("imagen_placeholder")
 
 # Reintentos automáticos con tenacity ante fallos en la API de Gemini
@@ -424,6 +432,7 @@ def main():
                 if datos_ia:
                     filename = f"{slugify(datos_ia['titulo_seo'])}.html"
                     imagen_url = extraer_imagen_rss(entry)
+                    logging.info(f"Imagen extraída para '{entry.title}': {imagen_url}")
                     if getattr(entry, 'published_parsed', None):
                         fecha_dt = datetime.fromtimestamp(time.mktime(entry.published_parsed))
                     else:
