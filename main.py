@@ -233,7 +233,10 @@ def generar_html_noticia(item):
         f.write(html)
 
 def actualizar_index(noticias):
-    """Reconstruye el index.html ordenando por fecha reciente y usando tarjetas con metadatos reales."""
+    """
+    Lee la lista de noticias procesadas y reescribe el archivo index.html.
+    Ordena las publicaciones por fecha y genera las tarjetas para el grid.
+    """
     
     # Ordenar noticias por fecha ISO descendente
     noticias_ordenadas = sorted(noticias, key=lambda x: x.get('fecha_iso', ''), reverse=True)
@@ -277,7 +280,7 @@ def actualizar_index(noticias):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AnimePulse - Noticias de Anime & Manga al Instante</title>
-    <meta name="description" content="Portal automatizado de noticias sobre anime, manga y cultura otaku.">
+    <meta name="description" content="Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="assets/main.js" defer></script>
     <style>
@@ -294,7 +297,7 @@ def actualizar_index(noticias):
                 ANIME<span class="text-white">PULSE</span>
             </a>
             <div class="relative w-full sm:w-72">
-                <input type="text" id="buscador" onkeyup="ejecutarFiltro()" placeholder="Buscar por título..." 
+                <input type="text" id="buscador" onkeyup="ejecutarFiltro()" placeholder="Buscar por título..." aria-label="Buscar noticias por título"
                     class="w-full bg-slate-950 text-slate-200 text-sm pl-4 pr-4 py-2 rounded-lg border border-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-colors">
             </div>
         </div>
