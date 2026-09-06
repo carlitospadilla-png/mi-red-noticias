@@ -13,6 +13,7 @@ from urllib.parse import urljoin
 import bleach
 import feedparser
 import markdown
+import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from google import genai
@@ -44,6 +45,12 @@ IMAGENES_TEMATICAS = {
     'peliculas': 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=800&auto=format&fit=crop',
     'industria': 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=800&auto=format&fit=crop',
 }
+MAPA_CATEGORIAS = {
+    'PELICULAS': 'PELÍCULAS', 'PELÍCULAS': 'PELÍCULAS',
+    'SHONEN': 'SHONEN', 'SEINEN': 'SEINEN', 'MANGA': 'MANGA',
+    'ESTRENOS': 'ESTRENOS', 'INDUSTRIA': 'INDUSTRIA',
+}
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 TAGS_PERMITIDOS = ['p', 'h2', 'h3', 'strong', 'em', 'ul', 'ol', 'li', 'a', 'blockquote', 'br']
 ATRIBUTOS_PERMITIDOS = {'a': ['href', 'title', 'rel']}
 
@@ -144,14 +151,56 @@ def extraer_imagen_rss(entry):
     return None
 
 
-def construir_imagen_tematica(imagen_keywords):
-    """Elige una imagen estatica publica cuando el RSS no aporta una imagen."""
-    palabras = slugify(imagen_keywords or 'anime')
-    for categoria, imagen_url in IMAGENES_TEMATICAS.items():
-        if categoria in palabras:
-            return imagen_url
-    indice = sum(ord(caracter) for caracter in palabras) % len(IMAGENES_TEMATICAS)
-    return list(IMAGENES_TEMATICAS.values())[indice]
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+def _consultar_pexels_por_keyword(keyword):
+    """Consulta la API de Pexels para una palabra clave concreta con reintentos limitados."""
+    api_key = str(PEXELS_API_KEY or "")
+    response = requests.get(
+        "https://api.pexels.com/v1/search",
+        headers={"Authorization": api_key},
+        params={"query": keyword, "per_page": 5, "orientation": "landscape"},
+        timeout=10,
+    )
+    if response.status_code != 200:
+        raise requests.HTTPError(f"status HTTP {response.status_code} desde Pexels para '{keyword}'")
+
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise ValueError(f"respuesta JSON invalida para '{keyword}'") from error
+
+    photos = payload.get('photos') or []
+    if not photos:
+        return None
+
+    imagen = photos[0].get('src', {})
+    return imagen.get('large') or imagen.get('medium') or IMAGEN_PLACEHOLDER
+
+
+def buscar_imagen_pexels(imagen_keywords):
+    """Intenta obtener una imagen segura de Pexels y degrada siempre a placeholder."""
+    if not PEXELS_API_KEY:
+        logging.warning("No se detectó PEXELS_API_KEY; se usara placeholder de imagen.")
+        return IMAGEN_PLACEHOLDER
+
+    keywords = [str(imagen_keywords or 'anime').strip() or 'anime']
+    if keywords[0].lower() != 'anime':
+        keywords.append('anime')
+
+    for keyword in keywords:
+        try:
+            imagen_url = _consultar_pexels_por_keyword(keyword)
+            if imagen_url:
+                logging.info("Imagen desde Pexels para '%s': %s", keyword, imagen_url)
+                return imagen_url
+            logging.warning("Pexels no devolvio resultados para '%s'.", keyword)
+        except (requests.Timeout, requests.RequestException, ValueError, TypeError) as error:
+            logging.warning("Fallo de red o respuesta invalida en Pexels para '%s': %s", keyword, error)
+        except Exception as error:
+            logging.warning("Error inesperado consultando Pexels para '%s': %s", keyword, error)
+
+    logging.warning("Se usara placeholder de imagen porque Pexels no entrego una imagen fiable.")
+    return IMAGEN_PLACEHOLDER
 
 
 def extraer_fecha_entry(entry):
@@ -382,16 +431,22 @@ def elegir_filename(titulo, link_original, filenames_existentes):
 def preparar_noticia(datos_ia, entry, filenames_existentes):
     """Combina RSS y Gemini en un registro persistente listo para publicar."""
     url_original = entry.get('link', '')
+    titulo = datos_ia.get('titulo_seo') or entry.get('title', 'Noticia de anime')
     imagen_url = extraer_imagen_rss(entry)
-    if not imagen_url:
-        imagen_url = construir_imagen_tematica(datos_ia.get('imagen_keywords'))
+    if imagen_url:
+        logging.info("Imagen desde RSS para '%s': %s", titulo, imagen_url)
+    else:
+        imagen_url = buscar_imagen_pexels(datos_ia.get('imagen_keywords'))
+        if imagen_url == IMAGEN_PLACEHOLDER:
+            logging.warning("Imagen placeholder usada para '%s' porque el RSS y Pexels no entregaron una fuente valida.", titulo)
     fecha_iso, fecha_formateada = extraer_fecha_entry(entry)
     contenido = datos_ia.get('contenido_markdown', '')
+    categoria_normalizada = MAPA_CATEGORIAS.get((datos_ia.get('categoria') or 'ANIME').upper(), 'ANIME')
     return {
         'url_original': url_original,
-        'filename': elegir_filename(datos_ia.get('titulo_seo', 'Noticia anime'), url_original, filenames_existentes),
-        'titulo_seo': datos_ia.get('titulo_seo') or 'Noticia de anime',
-        'categoria': (datos_ia.get('categoria') or 'ANIME').upper(),
+        'filename': elegir_filename(titulo, url_original, filenames_existentes),
+        'titulo_seo': titulo,
+        'categoria': categoria_normalizada,
         'meta_descripcion': datos_ia.get('meta_descripcion') or '',
         'contenido_markdown': contenido,
         'imagen_keywords': datos_ia.get('imagen_keywords') or 'anime manga',
@@ -431,6 +486,8 @@ def main():
     logging.info("Iniciando escaneo de feeds RSS...")
     for feed_url in CONFIG.get("feeds_rss", []):
         feed = feedparser.parse(feed_url)
+        if feed.bozo:
+            logging.warning("Feed con problemas (%s): %s", feed_url, feed.bozo_exception)
         for entry in feed.entries[:CONFIG.get("max_noticias_por_feed", NOTICIAS_POR_FEED)]:
             url_original = entry.get('link', '')
             if not url_original or url_original in urls_procesadas:
