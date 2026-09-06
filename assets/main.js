@@ -1,13 +1,19 @@
-// Variable global para controlar la paginación
+// assets/main.js - Lógica cliente para AnimePulse
+
+// Variables globales de control para la paginación
 let noticiasVisibles = 6;
 const NOTICIAS_POR_PAGINA = 6;
+let categoriaSeleccionada = 'TODAS';
 
+// Evento principal: se ejecuta cuando el DOM está completamente cargado
 document.addEventListener('DOMContentLoaded', () => {
     inicializarProgresoLectura();
-    inicializarPaginacion();
+    ejecutarFiltro(); // Aplica el filtro inicial y la paginación
 });
 
-// Barra de progreso de lectura para artículos individuales
+/**
+ * Mide el avance del scroll en artículos individuales y actualiza la barra.
+ */
 function inicializarProgresoLectura() {
     const progressBar = document.getElementById('progress-bar');
     if (!progressBar) return;
@@ -20,7 +26,9 @@ function inicializarProgresoLectura() {
     });
 }
 
-// Copiar enlace al portapapeles
+/**
+ * Copia la URL actual al portapapeles y cambia el texto del botón temporalmente.
+ */
 function copiarEnlace() {
     navigator.clipboard.writeText(window.location.href);
     const copyText = document.getElementById('copy-text');
@@ -30,16 +38,18 @@ function copiarEnlace() {
     }
 }
 
-// Filtro combinado: Buscador por texto + Categorías (Chips)
-let categoriaSeleccionada = 'TODAS';
-
+/**
+ * Selecciona una categoría, actualiza el estilo de los botones (chips) y filtra.
+ * @param {string} categoria - Nombre de la categoría seleccionada.
+ */
 function filtrarPorCategoria(categoria) {
     categoriaSeleccionada = categoria.toUpperCase();
     
-    // Actualizar estilos visuales de los botones de categoría
+    // Actualizar estilos visuales en las etiquetas/botones
     const botones = document.querySelectorAll('.chip-categoria');
     botones.forEach(btn => {
-        if (btn.dataset.categoria === categoriaSeleccionada) {
+        const btnCat = btn.dataset.categoria ? btn.dataset.categoria.toUpperCase() : '';
+        if (btnCat === categoriaSeleccionada) {
             btn.classList.add('bg-purple-600', 'text-white');
             btn.classList.remove('bg-slate-800', 'text-slate-400');
         } else {
@@ -51,13 +61,18 @@ function filtrarPorCategoria(categoria) {
     ejecutarFiltro();
 }
 
+/**
+ * Filtra las tarjetas comparando el texto del buscador y la categoría activa.
+ */
 function ejecutarFiltro() {
-    const inputTexto = document.getElementById('buscador') ? document.getElementById('buscador').value.toLowerCase() : '';
+    const buscador = document.getElementById('buscador');
+    const inputTexto = buscador ? buscador.value.toLowerCase().trim() : '';
     const tarjetas = document.querySelectorAll('.noticia-card');
     let encontradas = 0;
 
     tarjetas.forEach(tarjeta => {
-        const titulo = tarjeta.querySelector('.titulo-noticia').innerText.toLowerCase();
+        const tituloElem = tarjeta.querySelector('.titulo-noticia');
+        const titulo = tituloElem ? tituloElem.innerText.toLowerCase() : '';
         const categoria = tarjeta.dataset.categoria ? tarjeta.dataset.categoria.toUpperCase() : '';
 
         const coincideTexto = titulo.includes(inputTexto);
@@ -71,23 +86,34 @@ function ejecutarFiltro() {
         }
     });
 
-    // Controlar visibilidad de aviso "sin resultados"
+    // Gestionar mensaje de "no hay resultados"
     const noResultados = document.getElementById('no-resultados');
     if (noResultados) {
-        noResultados.style.display = (encontradas === 0) ? 'block' : 'none';
+        if (encontradas === 0) {
+            noResultados.classList.remove('hidden');
+            noResultados.style.display = 'block';
+        } else {
+            noResultados.classList.add('hidden');
+            noResultados.style.display = 'none';
+        }
     }
 
+    // Reiniciar paginación al filtrar
     inicializarPaginacion(true);
 }
 
-// Sistema de Paginación ("Cargar Más")
+/**
+ * Controla cuántas tarjetas filtradas se muestran en pantalla ("Cargar Más").
+ * @param {boolean} reset - Si es true, reinicia la cuenta a las primeras 6 noticias.
+ */
 function inicializarPaginacion(reset = false) {
     if (reset) noticiasVisibles = NOTICIAS_POR_PAGINA;
 
-    const tarjetas = document.querySelectorAll('.noticia-card:not(.hidden-filter)');
+    // Obtener únicamente las tarjetas que pasaron el filtro de texto y categoría
+    const tarjetasValidas = document.querySelectorAll('.noticia-card:not(.hidden-filter)');
     const btnCargarMas = document.getElementById('btn-cargar-mas');
 
-    tarjetas.forEach((tarjeta, index) => {
+    tarjetasValidas.forEach((tarjeta, index) => {
         if (index < noticiasVisibles) {
             tarjeta.style.display = 'flex';
         } else {
@@ -95,8 +121,15 @@ function inicializarPaginacion(reset = false) {
         }
     });
 
+    // Ocultar tarjetas no válidas completamente
+    const tarjetasOcultas = document.querySelectorAll('.noticia-card.hidden-filter');
+    tarjetasOcultas.forEach(tarjeta => {
+        tarjeta.style.display = 'none';
+    });
+
+    // Controlar visibilidad del botón "Cargar más"
     if (btnCargarMas) {
-        if (noticiasVisibles >= tarjetas.length) {
+        if (noticiasVisibles >= tarjetasValidas.length) {
             btnCargarMas.style.display = 'none';
         } else {
             btnCargarMas.style.display = 'inline-block';
@@ -104,6 +137,9 @@ function inicializarPaginacion(reset = false) {
     }
 }
 
+/**
+ * Incrementa el número de noticias visibles y actualiza la cuadrícula.
+ */
 function cargarMasNoticias() {
     noticiasVisibles += NOTICIAS_POR_PAGINA;
     inicializarPaginacion();
