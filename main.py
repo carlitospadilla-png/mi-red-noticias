@@ -2,6 +2,7 @@ import os
 import json
 import re
 import logging
+import unicodedata
 from html import escape
 import xml.etree.ElementTree as ET
 import time
@@ -57,6 +58,7 @@ def guardar_noticias_db(noticias):
 
 def slugify(texto):
     texto = texto.lower()
+    texto = unicodedata.normalize('NFKD', texto).encode('ascii', 'ignore').decode('ascii')
     texto = re.sub(r'[^\w\s-]', '', texto)
     texto = re.sub(r'[\s_-]+', '-', texto)
     return texto.strip('-')
