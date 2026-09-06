@@ -423,7 +423,6 @@ def main():
 
     cliente = genai.Client(api_key=api_key)
     noticias_db = cargar_noticias_db()
-    regenerar_publicaciones(noticias_db)
     urls_procesadas = {item.get('url_original') for item in noticias_db}
     filenames_existentes = {item.get('filename') for item in noticias_db}
     procesadas_count = 0
