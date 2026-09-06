@@ -70,7 +70,7 @@ function ejecutarFiltro() {
 
     tarjetas.forEach(tarjeta => {
         const tituloElem = tarjeta.querySelector('.titulo-noticia') || tarjeta.querySelector('h2');
-        const descElem = tarjeta.querySelector('p');
+        const descElem = tarjeta.querySelector('.descripcion-noticia') || tarjeta.querySelector('p');
         
         const titulo = tituloElem ? tituloElem.innerText.toLowerCase() : '';
         const descripcion = descElem ? descElem.innerText.toLowerCase() : '';
@@ -80,12 +80,9 @@ function ejecutarFiltro() {
         const coincideTexto = (inputTexto === '') || titulo.includes(inputTexto) || descripcion.includes(inputTexto);
         const coincideCategoria = (categoriaSeleccionada === 'TODAS') || (categoria === categoriaSeleccionada);
 
-        if (coincideTexto && coincideCategoria) {
-            tarjeta.classList.remove('hidden-filter');
-            encontradas++;
-        } else {
-            tarjeta.classList.add('hidden-filter');
-        }
+        tarjeta.classList.toggle('oculta-busqueda', !coincideTexto);
+        tarjeta.classList.toggle('oculta-categoria', !coincideCategoria);
+        if (coincideTexto && coincideCategoria) encontradas++;
     });
 
     // Control del aviso de no resultados
@@ -110,20 +107,16 @@ function ejecutarFiltro() {
 function inicializarPaginacion(reset = false) {
     if (reset) noticiasVisibles = NOTICIAS_POR_PAGINA;
 
-    const tarjetasValidas = document.querySelectorAll('.noticia-card:not(.hidden-filter)');
+    const tarjetas = document.querySelectorAll('.noticia-card');
+    const tarjetasValidas = Array.from(tarjetas).filter(tarjeta =>
+        !tarjeta.classList.contains('oculta-busqueda') &&
+        !tarjeta.classList.contains('oculta-categoria')
+    );
     const btnCargarMas = document.getElementById('btn-cargar-mas');
 
+    tarjetas.forEach(tarjeta => tarjeta.classList.remove('oculta-paginacion'));
     tarjetasValidas.forEach((tarjeta, index) => {
-        if (index < noticiasVisibles) {
-            tarjeta.style.display = 'flex';
-        } else {
-            tarjeta.style.display = 'none';
-        }
-    });
-
-    const tarjetasOcultas = document.querySelectorAll('.noticia-card.hidden-filter');
-    tarjetasOcultas.forEach(tarjeta => {
-        tarjeta.style.display = 'none';
+        tarjeta.classList.toggle('oculta-paginacion', index >= noticiasVisibles);
     });
 
     if (btnCargarMas) {

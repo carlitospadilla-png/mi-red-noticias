@@ -4,6 +4,7 @@ import re
 import logging
 from html import escape
 import xml.etree.ElementTree as ET
+import time
 from datetime import datetime
 from urllib.parse import urljoin
 import feedparser
@@ -106,11 +107,19 @@ def reescribir_con_gemini(cliente, titulo, descripcion):
 
 def generar_html_noticia(item):
     """Genera el HTML individual con metadatos de SEO on-page, Open Graph y Schema.org."""
-    
+
     # Renderizado robusto de Markdown a HTML
     contenido_html = markdown.markdown(item["contenido_markdown"])
-    
+
+    titulo = escape(str(item.get('titulo_seo', 'Noticia de anime')), quote=True)
+    meta_descripcion = escape(str(item.get('meta_descripcion', '')), quote=True)
+    imagen_url = escape(str(item.get('imagen_url', CONFIG.get('imagen_placeholder', ''))), quote=True)
+    url_original = escape(str(item.get('url_original', '')), quote=True)
+    categoria = escape(str(item.get('categoria', 'ANIME')), quote=True)
+    fecha_iso = escape(str(item.get('fecha_iso', '')), quote=True)
+    fecha_formateada = escape(str(item.get('fecha_formateada', '')), quote=True)
     url_canonical = urljoin(DOMINIO_BASE, f"{CARPETA_NOTICIAS}/{item['filename']}")
+    url_canonical_html = escape(url_canonical, quote=True)
     
     # JSON-LD Schema.org Article
     schema_org = {
@@ -125,32 +134,34 @@ def generar_html_noticia(item):
             "name": "AnimePulse"
         }
     }
+    schema_json = json.dumps(schema_org, ensure_ascii=False).replace("</", "<\\/")
 
     html = f"""<!DOCTYPE html>
 <html lang="es" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{item['titulo_seo']} - AnimePulse</title>
-    <meta name="description" content="{item['meta_descripcion']}">
-    <link rel="canonical" href="{url_canonical}">
+    <title>{titulo} - AnimePulse</title>
+    <meta name="description" content="{meta_descripcion}">
+    <link rel="icon" href="/favicon.ico">
+    <link rel="canonical" href="{url_canonical_html}">
     
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="article">
-    <meta property="og:title" content="{item['titulo_seo']}">
-    <meta property="og:description" content="{item['meta_descripcion']}">
-    <meta property="og:image" content="{item['imagen_url']}">
-    <meta property="og:url" content="{url_canonical}">
+    <meta property="og:title" content="{titulo}">
+    <meta property="og:description" content="{meta_descripcion}">
+    <meta property="og:image" content="{imagen_url}">
+    <meta property="og:url" content="{url_canonical_html}">
     
     <!-- Twitter Cards -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="{item['titulo_seo']}">
-    <meta name="twitter:description" content="{item['meta_descripcion']}">
-    <meta name="twitter:image" content="{item['imagen_url']}">
+    <meta name="twitter:title" content="{titulo}">
+    <meta name="twitter:description" content="{meta_descripcion}">
+    <meta name="twitter:image" content="{imagen_url}">
 
     <!-- Schema.org JSON-LD -->
     <script type="application/ld+json">
-    {json.dumps(schema_org, ensure_ascii=False)}
+    {schema_json}
     </script>
 
     <script src="https://cdn.tailwindcss.com"></script>
@@ -179,22 +190,22 @@ def generar_html_noticia(item):
         <header class="mb-8 border-b border-slate-800 pb-6">
             <div class="flex items-center gap-3 mb-4 text-xs font-semibold">
                 <span class="bg-purple-500/10 text-purple-400 border border-purple-500/20 px-3 py-1 rounded-full uppercase tracking-wider">
-                    {item['categoria']}
+                    {categoria}
                 </span>
                 <span class="text-slate-500">•</span>
-                <time class="text-slate-400" datetime="{item['fecha_iso']}">{item['fecha_formateada']}</time>
+                <time class="text-slate-400" datetime="{fecha_iso}">{fecha_formateada}</time>
             </div>
             
             <h1 class="text-3xl md:text-4xl font-extrabold text-white leading-tight mb-6">
-                {item['titulo_seo']}
+                {titulo}
             </h1>
             
             <div class="rounded-xl overflow-hidden mb-6 border border-slate-800">
-                <img src="{item['imagen_url']}" alt="{item['titulo_seo']}" loading="eager" class="w-full h-auto object-cover max-h-[450px]">
+                <img src="{imagen_url}" alt="{titulo}" loading="eager" class="w-full h-auto object-cover max-h-[450px]">
             </div>
 
             <p class="text-lg text-slate-300 leading-relaxed italic">
-                "{item['meta_descripcion']}"
+                "{meta_descripcion}"
             </p>
         </header>
 
@@ -205,7 +216,7 @@ def generar_html_noticia(item):
         <!-- Atribución de fuente original -->
         <div class="mt-8 p-4 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-400">
             <span>Fuente original: </span>
-            <a href="{item['url_original']}" target="_blank" rel="noopener noreferrer" class="text-purple-400 hover:underline font-semibold">
+            <a href="{url_original}" target="_blank" rel="noopener noreferrer" class="text-purple-400 hover:underline font-semibold">
                 Ver artículo original en fuente oficial
             </a>
         </div>
@@ -263,7 +274,7 @@ def actualizar_index(noticias):
                     <h2 class="text-lg font-bold text-white mb-2 line-clamp-2 hover:text-purple-400 transition-colors">
                         <a href="{url_noticia}" class="titulo-noticia">{titulo}</a>
                     </h2>
-                    <p class="text-xs text-slate-400 line-clamp-2">{meta_descripcion}</p>
+                    <p class="descripcion-noticia text-xs text-slate-400 line-clamp-2">{meta_descripcion}</p>
                 </div>
             </div>
             <div class="px-5 pb-5 pt-0 mt-auto">
@@ -281,10 +292,11 @@ def actualizar_index(noticias):
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AnimePulse - Noticias de Anime & Manga al Instante</title>
     <meta name="description" content="Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.">
+    <link rel="icon" href="/favicon.ico">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="assets/main.js" defer></script>
     <style>
-        .hidden-filter {{ display: none !important; }}
+        .oculta-busqueda, .oculta-categoria, .oculta-paginacion {{ display: none !important; }}
     </style>
 </head>
 <body class="bg-slate-950 text-slate-200 font-sans min-h-screen flex flex-col antialiased">
@@ -401,7 +413,10 @@ def main():
                 if datos_ia:
                     filename = f"{slugify(datos_ia['titulo_seo'])}.html"
                     imagen_url = extraer_imagen_rss(entry)
-                    ahora = datetime.now()
+                    if getattr(entry, 'published_parsed', None):
+                        fecha_dt = datetime.fromtimestamp(time.mktime(entry.published_parsed))
+                    else:
+                        fecha_dt = datetime.now()
 
                     item_noticia = {
                         "url_original": url_original,
@@ -411,8 +426,8 @@ def main():
                         "meta_descripcion": datos_ia["meta_descripcion"],
                         "contenido_markdown": datos_ia["contenido_markdown"],
                         "imagen_url": imagen_url,
-                        "fecha_iso": ahora.strftime('%Y-%m-%d'),
-                        "fecha_formateada": ahora.strftime('%d/%m/%Y')
+                        "fecha_iso": fecha_dt.strftime('%Y-%m-%d'),
+                        "fecha_formateada": fecha_dt.strftime('%d/%m/%Y')
                     }
 
                     generar_html_noticia(item_noticia)
