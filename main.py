@@ -1,408 +1,410 @@
-import os
+import hashlib
 import json
-import re
 import logging
-import unicodedata
-from html import escape
-import xml.etree.ElementTree as ET
+import os
+import re
 import time
+import unicodedata
+import xml.etree.ElementTree as ET
 from datetime import datetime
-from urllib.parse import urljoin
-import feedparser
-from bs4 import BeautifulSoup
-import markdown
+from html import escape
+from urllib.parse import quote_plus, urljoin
+
 import bleach
-from tenacity import retry, stop_after_attempt, wait_exponential
+import feedparser
+import markdown
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 load_dotenv()
 
-# Configuración de Logging Estructurado
+# Configuracion de logging estructurado.
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
 )
 
-# Cargar archivo de configuración
-def cargar_configuracion():
-    ruta_config = "config.json"
-    if os.path.exists(ruta_config):
-        with open(ruta_config, "r", encoding="utf-8") as f:
-            return json.load(f)
-    raise FileNotFoundError("El archivo config.json no existe.")
-
-CONFIG = cargar_configuracion()
-DOMINIO_BASE = CONFIG["dominio_base"]
+# Configuracion principal del sitio.
+DOMINIO_BASE = "https://carlitospadilla-png.github.io/mi-red-noticias/"
 HISTORIAL_FILE = "noticias.json"
+INDICE_FILE = "noticias_index.json"
 CARPETA_NOTICIAS = "noticias"
+ARCHIVO_SITEMAP = "sitemap.xml"
+ARCHIVO_ROBOTS = "robots"
+LIMITE_INDEX = 30
+NOTICIAS_POR_FEED = 5
+IMAGEN_PLACEHOLDER = "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop"
 TAGS_PERMITIDOS = ['p', 'h2', 'h3', 'strong', 'em', 'ul', 'ol', 'li', 'a', 'blockquote', 'br']
 ATRIBUTOS_PERMITIDOS = {'a': ['href', 'title', 'rel']}
 
+
+def cargar_configuracion():
+    """Carga los valores auxiliares del proyecto sin permitir que cambien el dominio canonico."""
+    ruta_config = "config.json"
+    if os.path.exists(ruta_config):
+        with open(ruta_config, "r", encoding="utf-8") as archivo:
+            return json.load(archivo)
+    return {}
+
+
+CONFIG = cargar_configuracion()
+IMAGEN_PLACEHOLDER = CONFIG.get("imagen_placeholder", IMAGEN_PLACEHOLDER)
+
+
+def cargar_json(ruta, valor_por_defecto):
+    """Lee un JSON y devuelve un valor seguro si el archivo no existe o esta dañado."""
+    if not os.path.exists(ruta):
+        return valor_por_defecto
+    with open(ruta, "r", encoding="utf-8") as archivo:
+        try:
+            return json.load(archivo)
+        except json.JSONDecodeError:
+            logging.warning("No se pudo leer %s; se usara un valor vacio.", ruta)
+            return valor_por_defecto
+
+
+def guardar_json(ruta, datos):
+    """Guarda JSON con formato legible y caracteres Unicode intactos."""
+    with open(ruta, "w", encoding="utf-8") as archivo:
+        json.dump(datos, archivo, ensure_ascii=False, indent=2)
+
+
 def cargar_noticias_db():
-    if os.path.exists(HISTORIAL_FILE):
-        with open(HISTORIAL_FILE, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return []
-    return []
+    """Carga el historial que se usa para no reprocesar URLs RSS repetidas."""
+    return cargar_json(HISTORIAL_FILE, [])
+
 
 def guardar_noticias_db(noticias):
-    # Mantener rotación del historial según la configuración
-    noticias_limitadas = noticias[:CONFIG.get("max_historial_registros", 200)]
-    with open(HISTORIAL_FILE, "w", encoding="utf-8") as f:
-        json.dump(noticias_limitadas, f, ensure_ascii=False, indent=2)
+    """Guarda el historial respetando el limite configurado."""
+    limite = CONFIG.get("max_historial_registros", 200)
+    guardar_json(HISTORIAL_FILE, noticias[:limite])
+
 
 def slugify(texto):
-    texto = texto.lower()
-    texto = unicodedata.normalize('NFKD', texto).encode('ascii', 'ignore').decode('ascii')
+    """Genera un slug ASCII estable para filenames y URLs nuevas."""
+    texto = unicodedata.normalize('NFKD', str(texto).lower()).encode('ascii', 'ignore').decode('ascii')
     texto = re.sub(r'[^\w\s-]', '', texto)
     texto = re.sub(r'[\s_-]+', '-', texto)
-    return texto.strip('-')
+    return texto.strip('-') or 'noticia-anime'
+
+
+def normalizar_fecha(fecha):
+    """Conserva fechas historicas y completa a medianoche las fechas antiguas sin hora."""
+    fecha = str(fecha or "")
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', fecha):
+        return f"{fecha}T00:00:00"
+    return fecha or datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+
+
+def calcular_tiempo_lectura(contenido_markdown):
+    """Calcula minutos de lectura aproximados a partir de unas 200 palabras por minuto."""
+    palabras = re.findall(r"\b\w+\b", str(contenido_markdown or ''), flags=re.UNICODE)
+    minutos = max(1, (len(palabras) + 199) // 200)
+    return f"Lectura de {minutos} min"
+
 
 def extraer_imagen_rss(entry):
-    """Extrae la URL de la imagen del feed RSS o usa una por defecto."""
-    # 1. Buscar en media_content o media_thumbnail
-    if 'media_content' in entry and len(entry.media_content) > 0:
-        return entry.media_content[0].get('url')
-    if 'media_thumbnail' in entry and len(entry.media_thumbnail) > 0:
-        return entry.media_thumbnail[0].get('url')
+    """Extrae una imagen real del RSS, respetando el orden de prioridad pedido."""
+    # 1. Campos multimedia estandar del feed.
+    for campo in ('media_content', 'media_thumbnail'):
+        elementos = entry.get(campo, []) or []
+        for elemento in elementos:
+            url_imagen = elemento.get('url') or elemento.get('href')
+            if url_imagen:
+                return url_imagen
 
-    # 2. Enclosures, comunes en algunos feeds RSS
-    if 'enclosures' in entry and len(entry.enclosures) > 0:
-        for enclosure in entry.enclosures:
-            tipo = enclosure.get('type', '')
-            url_enclosure = enclosure.get('href') or enclosure.get('url')
-            if tipo.startswith('image') and url_enclosure:
-                return url_enclosure
+    # 2. Enclosures, habituales en algunos RSS.
+    for enclosure in entry.get('enclosures', []) or []:
+        tipo = enclosure.get('type', '')
+        url_enclosure = enclosure.get('href') or enclosure.get('url')
+        if (tipo.startswith('image') or not tipo) and url_enclosure:
+            return url_enclosure
 
-    # 3. Buscar etiquetas <img> dentro del contenido HTML/Summary
-    contenido = getattr(entry, 'summary', '') or getattr(entry, 'description', '')
-    if contenido:
-        soup = BeautifulSoup(contenido, 'html.parser')
-        img = soup.find('img')
-        if img and img.get('src'):
-            return img['src']
+    # 3. Imagen incluida en summary, description o content.
+    bloques = [entry.get('summary', '') or entry.get('description', '')]
+    for contenido in entry.get('content', []) or []:
+        bloques.append(contenido.get('value', ''))
+    for bloque in bloques:
+        if bloque:
+            imagen = BeautifulSoup(bloque, 'html.parser').find('img')
+            if imagen and imagen.get('src'):
+                return imagen['src']
 
-    # 4. Imagen fallback
-    return CONFIG.get("imagen_placeholder")
+    return None
 
-# Reintentos automáticos con tenacity ante fallos en la API de Gemini
+
+def construir_imagen_tematica(imagen_keywords):
+    """Construye una URL tematica cuando el RSS no aporta una imagen."""
+    keywords = str(imagen_keywords or 'anime manga').strip() or 'anime manga'
+    return f"https://source.unsplash.com/featured/800x450/?{quote_plus(keywords)}"
+
+
+def extraer_fecha_entry(entry):
+    """Obtiene la fecha real de publicacion del RSS o usa el instante de procesamiento como fallback."""
+    if getattr(entry, 'published_parsed', None):
+        fecha_dt = datetime.fromtimestamp(time.mktime(entry.published_parsed))
+    else:
+        fecha_dt = datetime.now()
+    return fecha_dt.strftime('%Y-%m-%dT%H:%M:%S'), fecha_dt.strftime('%d/%m/%Y')
+
+
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
 def reescribir_con_gemini(cliente, titulo, descripcion):
+    """Pide a Gemini contenido SEO y palabras clave para una imagen tematica."""
     prompt = f"""
-    Reescribe este artículo de noticias sobre ANIME/MANGA en español.
-    Aporta valor editorial con un tono entretenido para fans del anime, optimizado para SEO.
+    Reescribe esta noticia de ANIME/MANGA en español con tono entretenido y optimizado para SEO.
 
-    Noticia Original:
-    Título: {titulo}
-    Descripción: {descripcion}
+    Titulo original: {titulo}
+    Descripcion original: {descripcion}
 
-    Responde ÚNICAMENTE en formato JSON con la siguiente estructura exacta:
+    Responde UNICAMENTE JSON con esta estructura exacta:
     {{
-      "titulo_seo": "Título descriptivo y atractivo",
-      "categoria": "Elegir una: SHONEN, SEINEN, MANGA, PELÍCULAS, ESTRENOS o INDUSTRIA",
-      "meta_descripcion": "Resumen conciso de 150 caracteres para SEO",
-      "contenido_markdown": "Cuerpo redactado en Markdown con subtítulos ## y párrafos estructurados."
+      "titulo_seo": "Titulo descriptivo y atractivo",
+      "categoria": "SHONEN, SEINEN, MANGA, PELICULAS, ESTRENOS o INDUSTRIA",
+      "meta_descripcion": "Resumen conciso de 150 caracteres",
+      "contenido_markdown": "Cuerpo completo en Markdown con ##, negritas y listas cuando corresponda",
+      "imagen_keywords": "2 o 3 palabras clave en ingles sobre el tema visual"
     }}
     """
-    response = cliente.models.generate_content(
+    respuesta = cliente.models.generate_content(
         model='gemini-flash-latest',
         contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json"
-        )
+        config=types.GenerateContentConfig(response_mime_type="application/json")
     )
-    return json.loads(response.text)
+    return json.loads(respuesta.text)
 
-def generar_html_noticia(item):
-    """Genera el HTML individual con metadatos de SEO on-page, Open Graph y Schema.org."""
 
-    # Renderizado robusto de Markdown a HTML
-    contenido_html = markdown.markdown(item["contenido_markdown"])
+def escapar_datos_noticia(datos_noticia):
+    """Prepara valores seguros para insertar en HTML sin modificar el contenido persistido."""
+    return {
+        'titulo_seo': escape(str(datos_noticia.get('titulo_seo') or 'Noticia de anime'), quote=True),
+        'meta_descripcion': escape(str(datos_noticia.get('meta_descripcion') or ''), quote=True),
+        'imagen_url': escape(str(datos_noticia.get('imagen_url') or IMAGEN_PLACEHOLDER), quote=True),
+        'url_original': escape(str(datos_noticia.get('url_original') or datos_noticia.get('link_original') or ''), quote=True),
+        'categoria': escape(str(datos_noticia.get('categoria') or 'ANIME'), quote=True),
+        'fecha_iso': escape(normalizar_fecha(datos_noticia.get('fecha_iso')), quote=True),
+        'fecha_formateada': escape(str(datos_noticia.get('fecha_formateada') or ''), quote=True),
+        'tiempo_lectura': escape(str(datos_noticia.get('tiempo_lectura') or 'Lectura de 1 min'), quote=True),
+    }
+
+
+def generar_html_noticia(datos_noticia, filename):
+    """Genera el HTML individual con metadatos SEO, contenido Markdown y JavaScript inline."""
+    contenido_html = markdown.markdown(str(datos_noticia.get('contenido_markdown') or ''))
     contenido_html = bleach.clean(
         contenido_html,
         tags=TAGS_PERMITIDOS,
         attributes=ATRIBUTOS_PERMITIDOS,
         strip=True
     )
-
-    titulo = escape(str(item.get('titulo_seo', 'Noticia de anime')), quote=True)
-    meta_descripcion = escape(str(item.get('meta_descripcion', '')), quote=True)
-    imagen_url = escape(str(item.get('imagen_url', CONFIG.get('imagen_placeholder', ''))), quote=True)
-    url_original = escape(str(item.get('url_original', '')), quote=True)
-    categoria = escape(str(item.get('categoria', 'ANIME')), quote=True)
-    fecha_iso = escape(str(item.get('fecha_iso', '')), quote=True)
-    fecha_formateada = escape(str(item.get('fecha_formateada', '')), quote=True)
-    url_canonical = urljoin(DOMINIO_BASE, f"{CARPETA_NOTICIAS}/{item['filename']}")
-    url_canonical_html = escape(url_canonical, quote=True)
-    
-    # JSON-LD Schema.org Article
+    datos_noticia['contenido_html'] = contenido_html
+    seguros = escapar_datos_noticia(datos_noticia)
+    url_completa = urljoin(DOMINIO_BASE, f"{CARPETA_NOTICIAS}/{filename}")
+    url_completa_html = escape(url_completa, quote=True)
     schema_org = {
         "@context": "https://schema.org",
         "@type": "NewsArticle",
-        "headline": item["titulo_seo"],
-        "image": [item["imagen_url"]],
-        "datePublished": item["fecha_iso"],
-        "description": item["meta_descripcion"],
-        "author": {
-            "@type": "Organization",
-            "name": "AnimePulse"
-        }
+        "headline": datos_noticia.get('titulo_seo') or 'Noticia de anime',
+        "image": [datos_noticia.get('imagen_url') or IMAGEN_PLACEHOLDER],
+        "datePublished": normalizar_fecha(datos_noticia.get('fecha_iso')),
+        "description": datos_noticia.get('meta_descripcion') or '',
     }
-    schema_json = json.dumps(schema_org, ensure_ascii=False).replace("</", "<\\/")
+    schema_json = json.dumps(schema_org, ensure_ascii=False).replace('</', '<\\/')
 
-    html = f"""<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html lang="es" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{titulo} - AnimePulse</title>
-    <meta name="description" content="{meta_descripcion}">
+    <title>{seguros['titulo_seo']} - AnimePulse</title>
+    <meta name="description" content="{seguros['meta_descripcion']}">
+    <link rel="canonical" href="{url_completa_html}">
     <link rel="icon" href="/favicon.ico">
-    <link rel="canonical" href="{url_canonical_html}">
-    
-    <!-- Open Graph / Facebook -->
     <meta property="og:type" content="article">
-    <meta property="og:title" content="{titulo}">
-    <meta property="og:description" content="{meta_descripcion}">
-    <meta property="og:image" content="{imagen_url}">
-    <meta property="og:url" content="{url_canonical_html}">
-    
-    <!-- Twitter Cards -->
+    <meta property="og:title" content="{seguros['titulo_seo']}">
+    <meta property="og:description" content="{seguros['meta_descripcion']}">
+    <meta property="og:image" content="{seguros['imagen_url']}">
+    <meta property="og:url" content="{url_completa_html}">
+    <meta property="og:site_name" content="AnimePulse">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="{titulo}">
-    <meta name="twitter:description" content="{meta_descripcion}">
-    <meta name="twitter:image" content="{imagen_url}">
-
-    <!-- Schema.org JSON-LD -->
-    <script type="application/ld+json">
-    {schema_json}
-    </script>
-
+    <meta name="twitter:title" content="{seguros['titulo_seo']}">
+    <meta name="twitter:description" content="{seguros['meta_descripcion']}">
+    <meta name="twitter:image" content="{seguros['imagen_url']}">
+    <script type="application/ld+json">{schema_json}</script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="../assets/main.js" defer></script>
 </head>
 <body class="bg-slate-950 text-slate-200 font-sans min-h-screen flex flex-col antialiased">
-    
-    <div id="progress-bar" class="fixed top-0 left-0 h-1 bg-gradient-to-r from-purple-500 to-pink-500 z-50 transition-all duration-150" style="width: 0%;"></div>
-
-    <!-- INSERTAR AQUÍ CÓDIGO JS DE ANUNCIOS (ADSENSE / ADSTERRA) -->
-
-    <header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40">
-        <div class="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
-            <a href="../index.html" class="text-2xl font-black bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
-                ANIME<span class="text-white">PULSE</span>
-            </a>
-            <a href="../index.html" class="text-sm font-semibold text-slate-300 hover:text-purple-400 transition-colors">
-                ← Volver al Inicio
-            </a>
+    <div id="progress-bar" class="fixed top-0 left-0 h-1 bg-purple-600 z-50 transition-all duration-150" style="width: 0%"></div>
+    <header class="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-40">
+        <div class="max-w-4xl mx-auto flex justify-between items-center">
+            <a href="../index.html" class="text-2xl font-black bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">ANIME<span class="text-white">PULSE</span></a>
+            <a href="../index.html" class="text-xs font-bold text-slate-400 hover:text-white transition-colors">← Volver al inicio</a>
         </div>
     </header>
-
-    <main class="max-w-3xl mx-auto my-8 px-4 flex-grow w-full">
-        <!-- INSERTAR AQUÍ CÓDIGO JS DE ANUNCIOS -->
-
-        <header class="mb-8 border-b border-slate-800 pb-6">
-            <div class="flex items-center gap-3 mb-4 text-xs font-semibold">
-                <span class="bg-purple-500/10 text-purple-400 border border-purple-500/20 px-3 py-1 rounded-full uppercase tracking-wider">
-                    {categoria}
-                </span>
-                <span class="text-slate-500">•</span>
-                <time class="text-slate-400" datetime="{fecha_iso}">{fecha_formateada}</time>
+    <main class="max-w-3xl mx-auto my-10 px-4 flex-grow">
+        <article>
+            <span class="bg-purple-600/90 text-white px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">{seguros['categoria']}</span>
+            <h1 class="text-3xl md:text-4xl font-black text-white mt-4 mb-2">{seguros['titulo_seo']}</h1>
+            <p class="text-xs text-slate-400 mb-6"><time datetime="{seguros['fecha_iso']}">{seguros['fecha_formateada']}</time> • {seguros['tiempo_lectura']}</p>
+            <div class="rounded-xl overflow-hidden mb-8 border border-slate-800"><img src="{seguros['imagen_url']}" alt="{seguros['titulo_seo']}" class="w-full h-auto object-cover" loading="lazy"></div>
+            <div class="my-6 p-4 bg-slate-900/50 border border-slate-800/80 rounded-lg text-center text-xs text-slate-500"><!-- Banner Publicitario Superior --></div>
+            <div class="prose prose-invert max-w-none text-slate-300 space-y-4 leading-relaxed">{contenido_html}</div>
+            <div class="mt-8 p-4 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-400">Fuente original: <a href="{seguros['url_original']}" target="_blank" rel="noopener noreferrer" class="text-purple-400 hover:underline">Ver artículo original</a></div>
+            <div class="mt-10 pt-6 border-t border-slate-800 flex justify-between items-center">
+                <button onclick="copiarEnlace()" class="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-4 rounded-lg transition-colors"><span id="copy-text">Copiar Enlace</span></button>
+                <a href="../index.html" class="bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold py-2 px-4 rounded-lg transition-all">Más Noticias</a>
             </div>
-            
-            <h1 class="text-3xl md:text-4xl font-extrabold text-white leading-tight mb-6">
-                {titulo}
-            </h1>
-            
-            <div class="rounded-xl overflow-hidden mb-6 border border-slate-800">
-                <img src="{imagen_url}" alt="{titulo}" loading="eager" class="w-full h-auto object-cover max-h-[450px]">
-            </div>
-
-            <p class="text-lg text-slate-300 leading-relaxed italic">
-                "{meta_descripcion}"
-            </p>
-        </header>
-
-        <article class="prose prose-invert max-w-none text-slate-200 leading-relaxed space-y-5 text-base md:text-lg">
-            {contenido_html}
         </article>
-
-        <!-- Atribución de fuente original -->
-        <div class="mt-8 p-4 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-400">
-            <span>Fuente original: </span>
-            <a href="{url_original}" target="_blank" rel="noopener noreferrer" class="text-purple-400 hover:underline font-semibold">
-                Ver artículo original en fuente oficial
-            </a>
-        </div>
-
-        <div class="mt-8 pt-6 border-t border-slate-800 flex items-center justify-between">
-            <button onclick="copiarEnlace()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-bold py-2.5 px-5 rounded-lg border border-slate-700 transition-all focus:ring-2 focus:ring-purple-500">
-                <span id="copy-text">Copiar Enlace</span>
-            </button>
-            <a href="../index.html" class="bg-purple-600 hover:bg-purple-500 text-white text-sm font-bold py-2.5 px-5 rounded-lg transition-all">
-                Más Noticias
-            </a>
-        </div>
-
-        <!-- INSERTAR AQUÍ CÓDIGO JS DE ANUNCIOS -->
     </main>
-
-    <footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-6 text-sm">
-        <p>&copy; {datetime.now().year} AnimePulse. Portal informativo automatizado.</p>
-    </footer>
+    <footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-6 text-sm"><p>&copy; AnimePulse. Todos los derechos reservados.</p></footer>
+    <script>
+    window.onscroll = function() {{
+        const winScroll = document.body.scrollTop || document.documentElement.scrollTop;
+        const height = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+        document.getElementById("progress-bar").style.width = (height ? (winScroll / height) * 100 : 0) + "%";
+    }};
+    function copiarEnlace() {{
+        navigator.clipboard.writeText(window.location.href);
+        const copyText = document.getElementById("copy-text");
+        copyText.innerText = "¡Copiado!";
+        setTimeout(() => {{ copyText.innerText = "Copiar Enlace"; }}, 2000);
+    }}
+    </script>
 </body>
 </html>"""
-
     os.makedirs(CARPETA_NOTICIAS, exist_ok=True)
-    with open(os.path.join(CARPETA_NOTICIAS, item['filename']), "w", encoding="utf-8") as f:
-        f.write(html)
+    with open(os.path.join(CARPETA_NOTICIAS, filename), "w", encoding="utf-8") as archivo:
+        archivo.write(html_content)
 
-def actualizar_index(noticias):
-    """
-    Lee la lista de noticias procesadas y reescribe el archivo index.html.
-    Ordena las publicaciones por fecha y genera las tarjetas para el grid.
-    """
-    
-    # Ordenar noticias por fecha ISO descendente
-    noticias_ordenadas = sorted(noticias, key=lambda x: x.get('fecha_iso', ''), reverse=True)
-    
+
+def construir_registro_indice(noticia, existente=None):
+    """Convierte una noticia del historial al formato publico persistente del indice."""
+    existente = existente or {}
+    contenido = noticia.get('contenido_markdown', '')
+    fecha_iso = normalizar_fecha(noticia.get('fecha_iso') or existente.get('fecha_iso'))
+    return {
+        'filename': noticia.get('filename') or existente.get('filename', ''),
+        'titulo_seo': noticia.get('titulo_seo') or existente.get('titulo_seo', 'Noticia de anime'),
+        'categoria': (noticia.get('categoria') or existente.get('categoria') or 'ANIME').upper(),
+        'meta_descripcion': noticia.get('meta_descripcion') or existente.get('meta_descripcion', ''),
+        'imagen_url': noticia.get('imagen_url') or existente.get('imagen_url') or IMAGEN_PLACEHOLDER,
+        'fecha_iso': fecha_iso,
+        'fecha_formateada': noticia.get('fecha_formateada') or existente.get('fecha_formateada') or datetime.fromisoformat(fecha_iso).strftime('%d/%m/%Y'),
+        'tiempo_lectura': noticia.get('tiempo_lectura') or existente.get('tiempo_lectura') or calcular_tiempo_lectura(contenido),
+        'link_original': noticia.get('url_original') or noticia.get('link_original') or existente.get('link_original', ''),
+    }
+
+
+def sincronizar_indice(noticias):
+    """Crea o actualiza noticias_index.json sin perder metadatos ya publicados."""
+    indice_anterior = cargar_json(INDICE_FILE, [])
+    anteriores = {item.get('link_original', ''): item for item in indice_anterior}
+    indice = [construir_registro_indice(noticia, anteriores.get(noticia.get('url_original', ''))) for noticia in noticias]
+    indice = [item for item in indice if item.get('filename')]
+    indice.sort(key=lambda item: item.get('fecha_iso', ''), reverse=True)
+    guardar_json(INDICE_FILE, indice)
+    return indice
+
+
+def actualizar_index():
+    """Regenera el indice desde noticias_index.json y muestra como maximo 30 tarjetas."""
+    noticias = sorted(cargar_json(INDICE_FILE, []), key=lambda item: item.get('fecha_iso', ''), reverse=True)[:LIMITE_INDEX]
     tarjetas_html = ""
-    for item in noticias_ordenadas:
+    for item in noticias:
+        seguros = escapar_datos_noticia({**item, 'url_original': item.get('link_original', '')})
         url_noticia = escape(f"{CARPETA_NOTICIAS}/{item['filename']}", quote=True)
-        categoria = escape(str(item.get('categoria', 'ANIME')), quote=True)
-        titulo = escape(str(item.get('titulo_seo', 'Noticia de anime')))
-        imagen_url = escape(str(item.get('imagen_url', CONFIG.get('imagen_placeholder', ''))), quote=True)
-        fecha_formateada = escape(str(item.get('fecha_formateada', '')))
-        meta_descripcion = escape(str(item.get('meta_descripcion', '')))
+        tiempo = escape(item.get('tiempo_lectura', 'Lectura de 1 min'), quote=True)
         tarjetas_html += f"""
-        <article class="noticia-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-purple-500/50 transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between" data-categoria="{categoria}">
-            <div>
-                <div class="h-48 overflow-hidden relative border-b border-slate-800">
-                    <img src="{imagen_url}" alt="{titulo}" loading="lazy" class="w-full h-full object-cover">
-                    <span class="absolute top-3 left-3 bg-purple-600/90 backdrop-blur-sm text-white px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider">
-                        {categoria}
-                    </span>
-                </div>
-                <div class="p-5">
-                    <span class="text-xs text-slate-400 block mb-2">{fecha_formateada}</span>
-                    <h2 class="text-lg font-bold text-white mb-2 line-clamp-2 hover:text-purple-400 transition-colors">
-                        <a href="{url_noticia}" class="titulo-noticia">{titulo}</a>
-                    </h2>
-                    <p class="descripcion-noticia text-xs text-slate-400 line-clamp-2">{meta_descripcion}</p>
-                </div>
-            </div>
-            <div class="px-5 pb-5 pt-0 mt-auto">
-                <a href="{url_noticia}" class="text-xs font-bold text-purple-400 hover:text-purple-300 inline-flex items-center gap-1 focus:outline-none focus:ring-2 focus:ring-purple-500 rounded">
-                    Leer artículo →
-                </a>
-            </div>
+        <article class="noticia-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-purple-500/50 transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between" data-categoria="{seguros['categoria']}">
+            <div><div class="h-48 overflow-hidden relative border-b border-slate-800"><img src="{seguros['imagen_url']}" alt="{seguros['titulo_seo']}" loading="lazy" class="w-full h-full object-cover"><span class="absolute top-3 left-3 bg-purple-600/90 text-white px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider">{seguros['categoria']}</span></div>
+            <div class="p-5"><span class="text-xs text-slate-400 block mb-2">{seguros['fecha_formateada']} • {tiempo}</span><h2 class="text-lg font-bold text-white mb-2 line-clamp-2 hover:text-purple-400 transition-colors"><a href="{url_noticia}" class="titulo-noticia">{seguros['titulo_seo']}</a></h2><p class="descripcion-noticia text-xs text-slate-400 line-clamp-2">{seguros['meta_descripcion']}</p></div></div>
+            <div class="px-5 pb-5 pt-0 mt-auto"><a href="{url_noticia}" class="text-xs font-bold text-purple-400 hover:text-purple-300 inline-flex items-center gap-1">Leer artículo →</a></div>
         </article>
         """
 
+    dominio_html = escape(DOMINIO_BASE, quote=True)
+    placeholder_html = escape(IMAGEN_PLACEHOLDER, quote=True)
     index_html = f"""<!DOCTYPE html>
-<html lang="es" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AnimePulse - Noticias de Anime & Manga al Instante</title>
-    <meta name="description" content="Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.">
-    <link rel="icon" href="/favicon.ico">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="assets/main.js" defer></script>
-    <style>
-        .oculta-busqueda, .oculta-categoria, .oculta-paginacion {{ display: none !important; }}
-    </style>
-</head>
-<body class="bg-slate-950 text-slate-200 font-sans min-h-screen flex flex-col antialiased">
+<html lang="es" class="dark"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AnimePulse - Noticias de Anime & Manga al Instante</title><meta name="description" content="Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga."><link rel="canonical" href="{dominio_html}"><link rel="icon" href="/favicon.ico"><meta property="og:type" content="website"><meta property="og:title" content="AnimePulse - Noticias de Anime & Manga al Instante"><meta property="og:description" content="Últimas novedades, estrenos y tendencias del mundo del anime y manga."><meta property="og:url" content="{dominio_html}"><meta property="og:site_name" content="AnimePulse"><meta property="og:image" content="{placeholder_html}"><script src="https://cdn.tailwindcss.com"></script><script src="assets/main.js" defer></script><style>.oculta-busqueda, .oculta-categoria, .oculta-paginacion {{ display: none !important; }}</style></head>
+<body class="bg-slate-950 text-slate-200 font-sans min-h-screen flex flex-col antialiased"><header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40"><div class="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row justify-between items-center gap-4"><a href="index.html" class="text-3xl font-black bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">ANIME<span class="text-white">PULSE</span></a><div class="relative w-full sm:w-72"><input type="text" id="buscador" onkeyup="ejecutarFiltro()" placeholder="Buscar por título o descripción..." aria-label="Buscar noticias" class="w-full bg-slate-950 text-slate-200 text-sm pl-4 pr-4 py-2 rounded-lg border border-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"></div></div></header>
+<section class="bg-gradient-to-b from-purple-900/20 to-transparent border-b border-slate-800/50 py-10 px-4 text-center"><div class="max-w-4xl mx-auto"><h1 class="text-3xl md:text-5xl font-black text-white mb-3">Noticias de Anime & Manga</h1><p class="text-slate-400 text-sm md:text-base mb-6">Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.</p><div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto"><button onclick="filtrarPorCategoria('TODAS')" data-categoria="TODAS" class="chip-categoria bg-purple-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">TODAS</button><button onclick="filtrarPorCategoria('SHONEN')" data-categoria="SHONEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">SHONEN</button><button onclick="filtrarPorCategoria('SEINEN')" data-categoria="SEINEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">SEINEN</button><button onclick="filtrarPorCategoria('MANGA')" data-categoria="MANGA" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">MANGA</button><button onclick="filtrarPorCategoria('PELÍCULAS')" data-categoria="PELÍCULAS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">PELÍCULAS</button><button onclick="filtrarPorCategoria('ESTRENOS')" data-categoria="ESTRENOS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">ESTRENOS</button></div></div></section>
+<main class="max-w-6xl mx-auto my-10 px-4 flex-grow w-full"><div id="grid-noticias" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{tarjetas_html}</div><div id="no-resultados" class="hidden text-center py-16"><p class="text-slate-400 text-lg font-semibold" role="status">No se encontraron noticias que coincidan con la búsqueda.</p></div><div class="text-center mt-10"><button id="btn-cargar-mas" type="button" onclick="cargarMasNoticias()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-lg shadow-lg">Cargar más noticias</button></div></main><footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-8 text-sm mt-auto"><p>&copy; {datetime.now().year} AnimePulse. Todos los derechos reservados.</p></footer></body></html>"""
+    with open("index.html", "w", encoding="utf-8") as archivo:
+        archivo.write(index_html)
 
-    <!-- INSERTAR AQUÍ CÓDIGO JS DE ANUNCIOS -->
 
-    <header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40">
-        <div class="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
-            <a href="index.html" class="text-3xl font-black bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
-                ANIME<span class="text-white">PULSE</span>
-            </a>
-            <div class="relative w-full sm:w-72">
-                <input type="text" id="buscador" onkeyup="ejecutarFiltro()" placeholder="Buscar por título..." aria-label="Buscar noticias por título"
-                    class="w-full bg-slate-950 text-slate-200 text-sm pl-4 pr-4 py-2 rounded-lg border border-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-colors">
-            </div>
-        </div>
-    </header>
-
-    <section class="bg-gradient-to-b from-purple-900/20 to-transparent border-b border-slate-800/50 py-10 px-4 text-center">
-        <div class="max-w-4xl mx-auto">
-            <h1 class="text-3xl md:text-5xl font-black text-white mb-3">
-                Noticias de Anime & Manga
-            </h1>
-            <p class="text-slate-400 text-sm md:text-base mb-6">
-                Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.
-            </p>
-
-            <!-- Filtros por Categoría (Chips) -->
-            <div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto">
-                <button onclick="filtrarPorCategoria('TODAS')" data-categoria="TODAS" class="chip-categoria bg-purple-600 text-white text-xs font-bold px-3 py-1.5 rounded-full border border-slate-700 transition-all focus:ring-2 focus:ring-purple-500">TODAS</button>
-                <button onclick="filtrarPorCategoria('SHONEN')" data-categoria="SHONEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full border border-slate-700 transition-all hover:text-white focus:ring-2 focus:ring-purple-500">SHONEN</button>
-                <button onclick="filtrarPorCategoria('SEINEN')" data-categoria="SEINEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full border border-slate-700 transition-all hover:text-white focus:ring-2 focus:ring-purple-500">SEINEN</button>
-                <button onclick="filtrarPorCategoria('MANGA')" data-categoria="MANGA" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full border border-slate-700 transition-all hover:text-white focus:ring-2 focus:ring-purple-500">MANGA</button>
-                <button onclick="filtrarPorCategoria('PELÍCULAS')" data-categoria="PELÍCULAS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full border border-slate-700 transition-all hover:text-white focus:ring-2 focus:ring-purple-500">PELÍCULAS</button>
-                <button onclick="filtrarPorCategoria('ESTRENOS')" data-categoria="ESTRENOS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full border border-slate-700 transition-all hover:text-white focus:ring-2 focus:ring-purple-500">ESTRENOS</button>
-            </div>
-        </div>
-    </section>
-
-    <main class="max-w-6xl mx-auto my-10 px-4 flex-grow w-full">
-        <!-- INSERTAR AQUÍ CÓDIGO JS DE ANUNCIOS -->
-
-        <div id="grid-noticias" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {tarjetas_html}
-        </div>
-
-        <!-- Estado Vacío -->
-        <div id="no-resultados" class="hidden text-center py-16">
-            <p class="text-slate-400 text-lg font-semibold" role="status">No se encontraron noticias que coincidan con la búsqueda.</p>
-        </div>
-
-        <!-- Botón Cargar Más -->
-        <div class="text-center mt-10">
-            <button id="btn-cargar-mas" type="button" onclick="cargarMasNoticias()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-lg shadow-lg transition-all focus:ring-2 focus:ring-purple-500" aria-label="Cargar más noticias">
-                Cargar más noticias
-            </button>
-        </div>
-    </main>
-
-    <footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-8 text-sm mt-auto">
-        <p>&copy; {datetime.now().year} AnimePulse. Todos los derechos reservados.</p>
-    </footer>
-</body>
-</html>"""
-
-    with open("index.html", "w", encoding="utf-8") as f:
-        f.write(index_html)
-
-def generar_sitemap(noticias):
-    """Genera sitemap.xml con las fechas de publicación reales (lastmod)."""
+def generar_sitemap():
+    """Genera sitemap.xml desde noticias_index.json y conserva la fecha real de cada artículo."""
+    indice = sorted(cargar_json(INDICE_FILE, []), key=lambda item: item.get('fecha_iso', ''), reverse=True)
     urlset = ET.Element("urlset", xmlns="http://www.sitemaps.org/schemas/sitemap/0.9")
-    
-    # URL del Index
-    url_node = ET.SubElement(urlset, "url")
-    ET.SubElement(url_node, "loc").text = DOMINIO_BASE
-    ET.SubElement(url_node, "lastmod").text = datetime.now().strftime('%Y-%m-%d')
-    
-    for item in noticias:
-        url_node = ET.SubElement(urlset, "url")
-        ET.SubElement(url_node, "loc").text = urljoin(DOMINIO_BASE, f"{CARPETA_NOTICIAS}/{item['filename']}")
-        ET.SubElement(url_node, "lastmod").text = item.get('fecha_iso', datetime.now().strftime('%Y-%m-%d'))
+    nodo_inicio = ET.SubElement(urlset, "url")
+    ET.SubElement(nodo_inicio, "loc").text = DOMINIO_BASE
+    ET.SubElement(nodo_inicio, "lastmod").text = normalizar_fecha(indice[0].get('fecha_iso')) if indice else datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    for item in indice:
+        nodo = ET.SubElement(urlset, "url")
+        ET.SubElement(nodo, "loc").text = urljoin(DOMINIO_BASE, f"{CARPETA_NOTICIAS}/{item['filename']}")
+        ET.SubElement(nodo, "lastmod").text = normalizar_fecha(item.get('fecha_iso'))
+    arbol = ET.ElementTree(urlset)
+    ET.indent(arbol, space="  ", level=0)
+    arbol.write(ARCHIVO_SITEMAP, encoding="utf-8", xml_declaration=True)
 
-    tree = ET.ElementTree(urlset)
-    ET.indent(tree, space="  ", level=0)
-    tree.write("sitemap.xml", encoding="utf-8", xml_declaration=True)
+
+def generar_robots():
+    """Mantiene robots con el sitemap derivado del dominio canonico."""
+    with open(ARCHIVO_ROBOTS, "w", encoding="utf-8") as archivo:
+        archivo.write(f"User-agent: *\nAllow: /\n\nSitemap: {urljoin(DOMINIO_BASE, 'sitemap.xml')}\n")
+
+
+def elegir_filename(titulo, link_original, filenames_existentes):
+    """Evita colisiones añadiendo seis caracteres del hash del enlace original."""
+    base = f"{slugify(titulo)}.html"
+    if base not in filenames_existentes:
+        return base
+    sufijo = hashlib.md5(str(link_original).encode('utf-8')).hexdigest()[:6]
+    return f"{slugify(titulo)}-{sufijo}.html"
+
+
+def preparar_noticia(datos_ia, entry, filenames_existentes):
+    """Combina RSS y Gemini en un registro persistente listo para publicar."""
+    url_original = entry.get('link', '')
+    imagen_url = extraer_imagen_rss(entry)
+    if not imagen_url:
+        imagen_url = construir_imagen_tematica(datos_ia.get('imagen_keywords'))
+    fecha_iso, fecha_formateada = extraer_fecha_entry(entry)
+    contenido = datos_ia.get('contenido_markdown', '')
+    return {
+        'url_original': url_original,
+        'filename': elegir_filename(datos_ia.get('titulo_seo', 'Noticia anime'), url_original, filenames_existentes),
+        'titulo_seo': datos_ia.get('titulo_seo') or 'Noticia de anime',
+        'categoria': (datos_ia.get('categoria') or 'ANIME').upper(),
+        'meta_descripcion': datos_ia.get('meta_descripcion') or '',
+        'contenido_markdown': contenido,
+        'imagen_keywords': datos_ia.get('imagen_keywords') or 'anime manga',
+        'imagen_url': imagen_url,
+        'fecha_iso': fecha_iso,
+        'fecha_formateada': fecha_formateada,
+        'tiempo_lectura': calcular_tiempo_lectura(contenido),
+    }
+
+
+def regenerar_publicaciones(noticias):
+    """Regenera articulos existentes y todos los artefactos publicos desde los datos persistidos."""
+    indice = sincronizar_indice(noticias)
+    por_link = {item.get('link_original'): item for item in indice}
+    for noticia in noticias:
+        registro = construir_registro_indice(noticia, por_link.get(noticia.get('url_original')))
+        generar_html_noticia({**noticia, **registro}, registro['filename'])
+    actualizar_index()
+    generar_sitemap()
+    generar_robots()
+
 
 def main():
+    """Procesa RSS nuevos y regenera todas las salidas estaticas del sitio."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         logging.warning("No se detectó GEMINI_API_KEY. Saliendo del script.")
@@ -410,62 +412,39 @@ def main():
 
     cliente = genai.Client(api_key=api_key)
     noticias_db = cargar_noticias_db()
-    urls_procesadas = {item["url_original"] for item in noticias_db}
-
+    regenerar_publicaciones(noticias_db)
+    urls_procesadas = {item.get('url_original') for item in noticias_db}
+    filenames_existentes = {item.get('filename') for item in noticias_db}
     procesadas_count = 0
     fallidas_count = 0
 
-    logging.info("Iniciando escaneo de Feeds RSS...")
-
+    logging.info("Iniciando escaneo de feeds RSS...")
     for feed_url in CONFIG.get("feeds_rss", []):
         feed = feedparser.parse(feed_url)
-        for entry in feed.entries[:CONFIG.get("max_noticias_por_feed", 5)]:
-            url_original = entry.link
-            
-            if url_original in urls_procesadas:
+        for entry in feed.entries[:CONFIG.get("max_noticias_por_feed", NOTICIAS_POR_FEED)]:
+            url_original = entry.get('link', '')
+            if not url_original or url_original in urls_procesadas:
                 continue
-
-            logging.info(f"Procesando nueva noticia: {entry.title}")
-            
+            logging.info("Procesando nueva noticia: %s", entry.get('title', 'sin titulo'))
             try:
-                datos_ia = reescribir_con_gemini(cliente, entry.title, getattr(entry, 'summary', ''))
+                datos_ia = reescribir_con_gemini(cliente, entry.get('title', ''), entry.get('summary', ''))
                 if datos_ia:
-                    filename = f"{slugify(datos_ia['titulo_seo'])}.html"
-                    imagen_url = extraer_imagen_rss(entry)
-                    logging.info(f"Imagen extraída para '{entry.title}': {imagen_url}")
-                    if getattr(entry, 'published_parsed', None):
-                        fecha_dt = datetime.fromtimestamp(time.mktime(entry.published_parsed))
-                    else:
-                        fecha_dt = datetime.now()
-
-                    item_noticia = {
-                        "url_original": url_original,
-                        "filename": filename,
-                        "titulo_seo": datos_ia["titulo_seo"],
-                        "categoria": datos_ia.get("categoria", "ANIME").upper(),
-                        "meta_descripcion": datos_ia["meta_descripcion"],
-                        "contenido_markdown": datos_ia["contenido_markdown"],
-                        "imagen_url": imagen_url,
-                        "fecha_iso": fecha_dt.strftime('%Y-%m-%d'),
-                        "fecha_formateada": fecha_dt.strftime('%d/%m/%Y')
-                    }
-
-                    generar_html_noticia(item_noticia)
+                    noticia = preparar_noticia(datos_ia, entry, filenames_existentes)
+                    logging.info("Imagen seleccionada para '%s': %s", entry.get('title', ''), noticia['imagen_url'])
+                    generar_html_noticia(noticia, noticia['filename'])
                     time.sleep(3)
-                    noticias_db.append(item_noticia)
+                    noticias_db.append(noticia)
                     urls_procesadas.add(url_original)
+                    filenames_existentes.add(noticia['filename'])
                     procesadas_count += 1
-
-            except Exception as e:
-                logging.error(f"Error procesando noticia '{entry.title}': {e}")
+            except Exception as error:
+                logging.error("Error procesando noticia '%s': %s", entry.get('title', ''), error)
                 fallidas_count += 1
 
-    # Guardar cambios y reconstruir índices
     guardar_noticias_db(noticias_db)
-    actualizar_index(noticias_db)
-    generar_sitemap(noticias_db)
+    regenerar_publicaciones(noticias_db)
+    logging.info("Proceso finalizado. Procesadas: %s. Fallidas: %s.", procesadas_count, fallidas_count)
 
-    logging.info(f"Proceso finalizado. Noticia(s) procesada(s): {procesadas_count}. Fallida(s): {fallidas_count}.")
 
 if __name__ == "__main__":
     main()
