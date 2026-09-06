@@ -81,7 +81,7 @@ def extraer_imagen_rss(entry):
     return CONFIG.get("imagen_placeholder")
 
 # Reintentos automáticos con tenacity ante fallos en la API de Gemini
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
 def reescribir_con_gemini(cliente, titulo, descripcion):
     prompt = f"""
     Reescribe este artículo de noticias sobre ANIME/MANGA en español.
@@ -440,6 +440,7 @@ def main():
                     }
 
                     generar_html_noticia(item_noticia)
+                    time.sleep(3)
                     noticias_db.append(item_noticia)
                     urls_procesadas.add(url_original)
                     procesadas_count += 1
