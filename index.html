@@ -33,7 +33,7 @@
                 Noticias de Anime & Manga
             </h1>
             <p class="text-slate-400 text-sm md:text-base mb-6">
-                Cobertura automatizada de lanzamientos, mangas y novedades de la industria.
+                Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.
             </p>
 
             <!-- Filtros por Categoría (Chips) -->
@@ -57,12 +57,12 @@
 
         <!-- Estado Vacío -->
         <div id="no-resultados" class="hidden text-center py-16">
-            <p class="text-slate-400 text-lg font-semibold">No se encontraron noticias que coincidan con la búsqueda.</p>
+            <p class="text-slate-400 text-lg font-semibold" role="status">No se encontraron noticias que coincidan con la búsqueda.</p>
         </div>
 
         <!-- Botón Cargar Más -->
         <div class="text-center mt-10">
-            <button id="btn-cargar-mas" onclick="cargarMasNoticias()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-lg shadow-lg transition-all focus:ring-2 focus:ring-purple-500">
+            <button id="btn-cargar-mas" type="button" onclick="cargarMasNoticias()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-lg shadow-lg transition-all focus:ring-2 focus:ring-purple-500" aria-label="Cargar más noticias">
                 Cargar más noticias
             </button>
         </div>
