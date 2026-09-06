@@ -100,7 +100,7 @@ def reescribir_con_gemini(cliente, titulo, descripcion):
     }}
     """
     response = cliente.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-flash-latest',
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json"
