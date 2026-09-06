@@ -2,6 +2,7 @@ import os
 import json
 import re
 import logging
+from html import escape
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from urllib.parse import urljoin
@@ -239,22 +240,27 @@ def actualizar_index(noticias):
     
     tarjetas_html = ""
     for item in noticias_ordenadas:
-        url_noticia = f"{CARPETA_NOTICIAS}/{item['filename']}"
+        url_noticia = escape(f"{CARPETA_NOTICIAS}/{item['filename']}", quote=True)
+        categoria = escape(str(item.get('categoria', 'ANIME')), quote=True)
+        titulo = escape(str(item.get('titulo_seo', 'Noticia de anime')))
+        imagen_url = escape(str(item.get('imagen_url', CONFIG.get('imagen_placeholder', ''))), quote=True)
+        fecha_formateada = escape(str(item.get('fecha_formateada', '')))
+        meta_descripcion = escape(str(item.get('meta_descripcion', '')))
         tarjetas_html += f"""
-        <article class="noticia-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-purple-500/50 transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between" data-categoria="{item['categoria']}">
+        <article class="noticia-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-purple-500/50 transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between" data-categoria="{categoria}">
             <div>
                 <div class="h-48 overflow-hidden relative border-b border-slate-800">
-                    <img src="{item['imagen_url']}" alt="{item['titulo_seo']}" loading="lazy" class="w-full h-full object-cover">
+                    <img src="{imagen_url}" alt="{titulo}" loading="lazy" class="w-full h-full object-cover">
                     <span class="absolute top-3 left-3 bg-purple-600/90 backdrop-blur-sm text-white px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider">
-                        {item['categoria']}
+                        {categoria}
                     </span>
                 </div>
                 <div class="p-5">
-                    <span class="text-xs text-slate-400 block mb-2">{item['fecha_formateada']}</span>
+                    <span class="text-xs text-slate-400 block mb-2">{fecha_formateada}</span>
                     <h2 class="text-lg font-bold text-white mb-2 line-clamp-2 hover:text-purple-400 transition-colors">
-                        <a href="{url_noticia}" class="titulo-noticia">{item['titulo_seo']}</a>
+                        <a href="{url_noticia}" class="titulo-noticia">{titulo}</a>
                     </h2>
-                    <p class="text-xs text-slate-400 line-clamp-2">{item['meta_descripcion']}</p>
+                    <p class="text-xs text-slate-400 line-clamp-2">{meta_descripcion}</p>
                 </div>
             </div>
             <div class="px-5 pb-5 pt-0 mt-auto">
@@ -300,7 +306,7 @@ def actualizar_index(noticias):
                 Noticias de Anime & Manga
             </h1>
             <p class="text-slate-400 text-sm md:text-base mb-6">
-                Cobertura automatizada de lanzamientos, mangas y novedades de la industria.
+                Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.
             </p>
 
             <!-- Filtros por Categoría (Chips) -->
@@ -324,12 +330,12 @@ def actualizar_index(noticias):
 
         <!-- Estado Vacío -->
         <div id="no-resultados" class="hidden text-center py-16">
-            <p class="text-slate-400 text-lg font-semibold">No se encontraron noticias que coincidan con la búsqueda.</p>
+            <p class="text-slate-400 text-lg font-semibold" role="status">No se encontraron noticias que coincidan con la búsqueda.</p>
         </div>
 
         <!-- Botón Cargar Más -->
         <div class="text-center mt-10">
-            <button id="btn-cargar-mas" onclick="cargarMasNoticias()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-lg shadow-lg transition-all focus:ring-2 focus:ring-purple-500">
+            <button id="btn-cargar-mas" type="button" onclick="cargarMasNoticias()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-lg shadow-lg transition-all focus:ring-2 focus:ring-purple-500" aria-label="Cargar más noticias">
                 Cargar más noticias
             </button>
         </div>
