@@ -74,6 +74,7 @@ def cargar_configuracion():
 CONFIG = cargar_configuracion()
 DOMINIO_BASE = CONFIG.get("dominio_base", "https://carlitospadilla-png.github.io/mi-red-noticias/")
 IMAGEN_PLACEHOLDER = CONFIG.get("imagen_placeholder", IMAGEN_PLACEHOLDER)
+IMAGEN_ANIME_FALLBACK = IMAGENES_TEMATICAS['anime']
 
 
 def cargar_json(ruta, valor_por_defecto):
@@ -190,6 +191,9 @@ def normalizar_url_anime(respuesta):
         return None
     if isinstance(respuesta, str):
         return respuesta.strip() or None
+    url_atributo = getattr(respuesta, 'url', None)
+    if url_atributo:
+        return str(url_atributo).strip() or None
     if isinstance(respuesta, dict):
         for clave in ('url', 'image', 'image_url', 'src', 'link'):
             valor = respuesta.get(clave)
@@ -249,8 +253,8 @@ def buscar_imagen_pexels(imagen_keywords=None):
             except Exception as error:
                 logging.warning("Error inesperado consultando Pexels para '%s': %s", keyword, error)
 
-    logging.warning("Se usara placeholder de imagen porque no hubo una fuente anime valida.")
-    return IMAGEN_PLACEHOLDER
+    logging.warning("Se usara el fallback visual anime porque no hubo una fuente remota valida.")
+    return IMAGEN_ANIME_FALLBACK
 
 
 def extraer_fecha_entry(entry):
@@ -300,9 +304,26 @@ La industria del anime y manga sigue creciendo con nuevos lanzamientos, estrenos
     }
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def llamar_gemini_con_reintento(cliente, prompt):
+    """Realiza la llamada a Gemini y deja que tenacity gestione los reintentos."""
+    esperar_cupo_gemini()
+    respuesta = cliente.models.generate_content(
+        model='gemini-flash-latest',
+        contents=prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json")
+    )
+    texto = getattr(respuesta, 'text', '') or ''
+    if not texto:
+        raise ValueError("Gemini devolvio una respuesta vacia")
+    datos = json.loads(texto)
+    if not isinstance(datos, dict):
+        raise ValueError("Gemini no devolvio un objeto JSON")
+    return datos
+
+
 def reescribir_con_gemini(cliente, titulo, descripcion):
-    """Pide a Gemini contenido SEO y palabras clave para una imagen temática, con fallback seguro."""
+    """Pide a Gemini contenido SEO y usa fallback solo tras agotar los reintentos."""
     prompt = f"""
     Reescribe esta noticia de ANIME/MANGA en español con tono entretenido y optimizado para SEO.
 
@@ -319,21 +340,9 @@ def reescribir_con_gemini(cliente, titulo, descripcion):
     }}
     """
     try:
-        esperar_cupo_gemini()
-        respuesta = cliente.models.generate_content(
-            model='gemini-flash-latest',
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json")
-        )
-        texto = getattr(respuesta, 'text', '') or ''
-        if not texto:
-            return contenido_fallback_seo(titulo, descripcion)
-        datos = json.loads(texto)
-        if not isinstance(datos, dict):
-            return contenido_fallback_seo(titulo, descripcion)
-        return datos
+        return llamar_gemini_con_reintento(cliente, prompt)
     except Exception as error:
-        logging.warning("Gemini falló para '%s'; usando contenido fallback. Motivo: %s", titulo or 'noticia', error)
+        logging.error("Gemini fallo tras varios reintentos para '%s'; usando contenido fallback. Motivo: %s", titulo or 'noticia', error)
         time.sleep(10)
         return contenido_fallback_seo(titulo, descripcion)
 
@@ -343,7 +352,7 @@ def escapar_datos_noticia(datos_noticia):
     return {
         'titulo_seo': escape(str(datos_noticia.get('titulo_seo') or 'Noticia de anime'), quote=True),
         'meta_descripcion': escape(str(datos_noticia.get('meta_descripcion') or ''), quote=True),
-        'imagen_url': escape(str(datos_noticia.get('imagen_url') or IMAGEN_PLACEHOLDER), quote=True),
+        'imagen_url': escape(str(datos_noticia.get('imagen_url') or IMAGEN_ANIME_FALLBACK), quote=True),
         'url_original': escape(str(datos_noticia.get('url_original') or datos_noticia.get('link_original') or ''), quote=True),
         'categoria': escape(str(datos_noticia.get('categoria') or 'ANIME'), quote=True),
         'fecha_iso': escape(normalizar_fecha(datos_noticia.get('fecha_iso')), quote=True),
@@ -369,7 +378,7 @@ def generar_html_noticia(datos_noticia, filename):
         "@context": "https://schema.org",
         "@type": "NewsArticle",
         "headline": datos_noticia.get('titulo_seo') or 'Noticia de anime',
-        "image": [datos_noticia.get('imagen_url') or IMAGEN_PLACEHOLDER],
+        "image": [datos_noticia.get('imagen_url') or IMAGEN_ANIME_FALLBACK],
         "datePublished": normalizar_fecha(datos_noticia.get('fecha_iso')),
         "description": datos_noticia.get('meta_descripcion') or '',
     }
@@ -533,13 +542,8 @@ def preparar_noticia(datos_ia, entry, filenames_existentes):
     url_original = entry.get('link', '')
     titulo = datos_ia.get('titulo_seo') or entry.get('title', 'Noticia de anime')
     imagen_url = buscar_imagen_pexels(datos_ia.get('imagen_keywords'))
-    if imagen_url == IMAGEN_PLACEHOLDER:
-        imagen_rss = extraer_imagen_rss(entry)
-        if imagen_rss:
-            imagen_url = imagen_rss
-            logging.info("Imagen RSS usada como fallback para '%s': %s", titulo, imagen_url)
-        else:
-            logging.warning("Imagen placeholder usada para '%s' porque no hubo fuente valida de anime ni RSS.", titulo)
+    if imagen_url == IMAGEN_ANIME_FALLBACK:
+        logging.warning("Fallback visual anime usado para '%s' porque no hubo una fuente remota valida.", titulo)
     else:
         logging.info("Imagen anime pura usada para '%s': %s", titulo, imagen_url)
     fecha_iso, fecha_formateada = extraer_fecha_entry(entry)
@@ -572,11 +576,19 @@ def regenerar_publicaciones(noticias):
     generar_robots()
 
 
+def regenerar_publicaciones_existentes():
+    """Reconstruye el sitio y sus metadatos usando el historial disponible."""
+    noticias_db = cargar_noticias_db()
+    regenerar_publicaciones(noticias_db)
+    logging.info("Sitio regenerado desde %s: %s noticias existentes.", HISTORIAL_FILE, len(noticias_db))
+
+
 def main():
     """Procesa RSS nuevos y regenera todas las salidas estaticas del sitio."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        logging.warning("No se detectó GEMINI_API_KEY. Saliendo del script.")
+        logging.warning("No se detecto GEMINI_API_KEY. Regenerando sitio con noticias existentes.")
+        regenerar_publicaciones_existentes()
         return
 
     cliente = genai.Client(api_key=api_key)

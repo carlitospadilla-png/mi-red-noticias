@@ -1,4 +1,4 @@
-﻿anime-api
+﻿anime-api==1.0.2
 annotated-types==0.8.0
 anyio==4.15.1
 beautifulsoup4==4.15.0
