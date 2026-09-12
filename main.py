@@ -20,6 +20,11 @@ from google import genai
 from google.genai import types
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+try:
+    from anime_api.apis import NekosAPI  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - dependencia opcional
+    NekosAPI = None
+
 load_dotenv()
 
 # Configuracion de logging estructurado.
@@ -37,6 +42,8 @@ ARCHIVO_SITEMAP = "sitemap.xml"
 ARCHIVO_ROBOTS = "robots.txt"
 LIMITE_INDEX = 30
 NOTICIAS_POR_FEED = 5
+GEMINI_MIN_INTERVAL_SECONDS = 12
+GEMINI_LAST_REQUEST_TS = 0.0
 IMAGEN_PLACEHOLDER = "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop"
 IMAGENES_TEMATICAS = {
     'anime': 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop',
@@ -177,29 +184,72 @@ def _consultar_pexels_por_keyword(keyword):
     return imagen.get('large') or imagen.get('medium') or IMAGEN_PLACEHOLDER
 
 
-def buscar_imagen_pexels(imagen_keywords):
-    """Intenta obtener una imagen segura de Pexels y degrada siempre a placeholder."""
-    if not PEXELS_API_KEY:
-        logging.warning("No se detectó PEXELS_API_KEY; se usara placeholder de imagen.")
-        return IMAGEN_PLACEHOLDER
+def normalizar_url_anime(respuesta):
+    """Normaliza posibles respuestas de NekosAPI a una URL valida."""
+    if respuesta is None:
+        return None
+    if isinstance(respuesta, str):
+        return respuesta.strip() or None
+    if isinstance(respuesta, dict):
+        for clave in ('url', 'image', 'image_url', 'src', 'link'):
+            valor = respuesta.get(clave)
+            if valor:
+                return str(valor).strip()
+        for valor in respuesta.values():
+            url = normalizar_url_anime(valor)
+            if url:
+                return url
+    if isinstance(respuesta, (list, tuple)):
+        for item in respuesta:
+            url = normalizar_url_anime(item)
+            if url:
+                return url
+    return None
 
-    keywords = [str(imagen_keywords or 'anime').strip() or 'anime']
-    if keywords[0].lower() != 'anime':
-        keywords.append('anime')
 
-    for keyword in keywords:
-        try:
-            imagen_url = _consultar_pexels_por_keyword(keyword)
-            if imagen_url:
-                logging.info("Imagen desde Pexels para '%s': %s", keyword, imagen_url)
-                return imagen_url
-            logging.warning("Pexels no devolvio resultados para '%s'.", keyword)
-        except (requests.Timeout, requests.RequestException, ValueError, TypeError) as error:
-            logging.warning("Fallo de red o respuesta invalida en Pexels para '%s': %s", keyword, error)
-        except Exception as error:
-            logging.warning("Error inesperado consultando Pexels para '%s': %s", keyword, error)
+def obtener_imagen_anime_pura():
+    """Intenta traer una imagen anime pura usando NekosAPI; si no existe, devuelve None."""
+    if NekosAPI is None:
+        return None
 
-    logging.warning("Se usara placeholder de imagen porque Pexels no entrego una imagen fiable.")
+    try:
+        nekos = NekosAPI()
+        respuesta = nekos.get_random_image()
+        imagen_url = normalizar_url_anime(respuesta)
+        if imagen_url:
+            logging.info("Imagen anime desde NekosAPI: %s", imagen_url)
+            return imagen_url
+        logging.warning("NekosAPI devolvio una respuesta sin URL valida.")
+    except Exception as error:
+        logging.warning("Fallo de NekosAPI; se usara fallback: %s", error)
+
+    return None
+
+
+def buscar_imagen_pexels(imagen_keywords=None):
+    """Devuelve una imagen puramente anime con NekosAPI y cae a placeholder si no funciona."""
+    imagen_url = obtener_imagen_anime_pura()
+    if imagen_url:
+        return imagen_url
+
+    if PEXELS_API_KEY:
+        keywords = [str(imagen_keywords or 'anime').strip() or 'anime']
+        if keywords[0].lower() != 'anime':
+            keywords.append('anime')
+
+        for keyword in keywords:
+            try:
+                imagen_url = _consultar_pexels_por_keyword(keyword)
+                if imagen_url:
+                    logging.info("Imagen desde Pexels para '%s': %s", keyword, imagen_url)
+                    return imagen_url
+                logging.warning("Pexels no devolvio resultados para '%s'.", keyword)
+            except (requests.Timeout, requests.RequestException, ValueError, TypeError) as error:
+                logging.warning("Fallo de red o respuesta invalida en Pexels para '%s': %s", keyword, error)
+            except Exception as error:
+                logging.warning("Error inesperado consultando Pexels para '%s': %s", keyword, error)
+
+    logging.warning("Se usara placeholder de imagen porque no hubo una fuente anime valida.")
     return IMAGEN_PLACEHOLDER
 
 
@@ -212,9 +262,47 @@ def extraer_fecha_entry(entry):
     return fecha_dt.strftime('%Y-%m-%dT%H:%M:%S'), fecha_dt.strftime('%d/%m/%Y')
 
 
-@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
+def esperar_cupo_gemini():
+    """Evita saturar Gemini forzando un intervalo mínimo entre llamadas."""
+    global GEMINI_LAST_REQUEST_TS
+    ahora = time.monotonic()
+    diferencia = ahora - GEMINI_LAST_REQUEST_TS
+    if diferencia < GEMINI_MIN_INTERVAL_SECONDS:
+        espera = GEMINI_MIN_INTERVAL_SECONDS - diferencia
+        logging.info("Esperando %.1f s antes de otra petición a Gemini para evitar rate limit.", espera)
+        time.sleep(espera)
+    GEMINI_LAST_REQUEST_TS = time.monotonic()
+
+
+def contenido_fallback_seo(titulo, descripcion):
+    """Genera un contenido seguro cuando Gemini falla por cuota o servicio saturado."""
+    titulo_limpio = str(titulo or 'Noticia de anime').strip() or 'Noticia de anime'
+    descripcion_limpia = str(descripcion or 'Noticias del mundo del anime y manga.').strip() or 'Noticias del mundo del anime y manga.'
+    meta = descripcion_limpia[:150].strip()
+    contenido = f"""## {titulo_limpio}
+
+{descripcion_limpia}
+
+### Lo más destacado
+- Anime y manga en el centro de la actualidad.
+- Noticias relevantes para la comunidad otaku.
+- Actualización rápida y clara del tema.
+
+### En resumen
+La industria del anime y manga sigue creciendo con nuevos lanzamientos, estrenos y novedades que mantienen a la comunidad muy activa.
+"""
+    return {
+        'titulo_seo': titulo_limpio,
+        'categoria': 'INDUSTRIA',
+        'meta_descripcion': meta,
+        'contenido_markdown': contenido,
+        'imagen_keywords': 'anime manga',
+    }
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
 def reescribir_con_gemini(cliente, titulo, descripcion):
-    """Pide a Gemini contenido SEO y palabras clave para una imagen tematica."""
+    """Pide a Gemini contenido SEO y palabras clave para una imagen temática, con fallback seguro."""
     prompt = f"""
     Reescribe esta noticia de ANIME/MANGA en español con tono entretenido y optimizado para SEO.
 
@@ -230,12 +318,24 @@ def reescribir_con_gemini(cliente, titulo, descripcion):
       "imagen_keywords": "2 o 3 palabras clave en ingles sobre el tema visual"
     }}
     """
-    respuesta = cliente.models.generate_content(
-        model='gemini-flash-latest',
-        contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json")
-    )
-    return json.loads(respuesta.text)
+    try:
+        esperar_cupo_gemini()
+        respuesta = cliente.models.generate_content(
+            model='gemini-flash-latest',
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json")
+        )
+        texto = getattr(respuesta, 'text', '') or ''
+        if not texto:
+            return contenido_fallback_seo(titulo, descripcion)
+        datos = json.loads(texto)
+        if not isinstance(datos, dict):
+            return contenido_fallback_seo(titulo, descripcion)
+        return datos
+    except Exception as error:
+        logging.warning("Gemini falló para '%s'; usando contenido fallback. Motivo: %s", titulo or 'noticia', error)
+        time.sleep(10)
+        return contenido_fallback_seo(titulo, descripcion)
 
 
 def escapar_datos_noticia(datos_noticia):
@@ -429,16 +529,19 @@ def elegir_filename(titulo, link_original, filenames_existentes):
 
 
 def preparar_noticia(datos_ia, entry, filenames_existentes):
-    """Combina RSS y Gemini en un registro persistente listo para publicar."""
+    """Combina RSS, fallback SEO y una imagen de anime pura lista para publicar."""
     url_original = entry.get('link', '')
     titulo = datos_ia.get('titulo_seo') or entry.get('title', 'Noticia de anime')
-    imagen_url = extraer_imagen_rss(entry)
-    if imagen_url:
-        logging.info("Imagen desde RSS para '%s': %s", titulo, imagen_url)
+    imagen_url = buscar_imagen_pexels(datos_ia.get('imagen_keywords'))
+    if imagen_url == IMAGEN_PLACEHOLDER:
+        imagen_rss = extraer_imagen_rss(entry)
+        if imagen_rss:
+            imagen_url = imagen_rss
+            logging.info("Imagen RSS usada como fallback para '%s': %s", titulo, imagen_url)
+        else:
+            logging.warning("Imagen placeholder usada para '%s' porque no hubo fuente valida de anime ni RSS.", titulo)
     else:
-        imagen_url = buscar_imagen_pexels(datos_ia.get('imagen_keywords'))
-        if imagen_url == IMAGEN_PLACEHOLDER:
-            logging.warning("Imagen placeholder usada para '%s' porque el RSS y Pexels no entregaron una fuente valida.", titulo)
+        logging.info("Imagen anime pura usada para '%s': %s", titulo, imagen_url)
     fecha_iso, fecha_formateada = extraer_fecha_entry(entry)
     contenido = datos_ia.get('contenido_markdown', '')
     categoria_normalizada = MAPA_CATEGORIAS.get((datos_ia.get('categoria') or 'ANIME').upper(), 'ANIME')
