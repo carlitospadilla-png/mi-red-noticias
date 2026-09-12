@@ -420,16 +420,34 @@ def generar_html_noticia(datos_noticia, filename):
             <h1 class="text-3xl md:text-4xl font-black text-white mt-4 mb-2">{seguros['titulo_seo']}</h1>
             <p class="text-xs text-slate-400 mb-6"><time datetime="{seguros['fecha_iso']}">{seguros['fecha_formateada']}</time> • {seguros['tiempo_lectura']}</p>
             <div class="rounded-xl overflow-hidden mb-8 border border-slate-800"><img src="{seguros['imagen_url']}" alt="{seguros['titulo_seo']}" class="w-full h-auto object-cover" loading="lazy"></div>
-            <div class="my-6 p-4 bg-slate-900/50 border border-slate-800/80 rounded-lg text-center text-xs text-slate-500"><!-- Banner Publicitario Superior --></div>
+            
+            <!-- CONTENEDOR DE ANUNCIO CABECERA DEL ARTÍCULO -->
+            <div class="ad-container my-6 p-4 bg-slate-900/40 border border-slate-800 rounded-lg text-center text-xs text-slate-500 min-h-[90px] flex items-center justify-center">
+                <!-- Pega aquí tu código <ins class="adsbygoogle"></ins> cuando tengas tu cuenta aprobada en Google AdSense -->
+                <span>Espacio Publicitario Reservado</span>
+            </div>
+
             <div class="prose prose-invert max-w-none text-slate-300 space-y-4 leading-relaxed">{contenido_html}</div>
-            <div class="mt-8 p-4 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-400">Fuente original: <a href="{seguros['url_original']}" target="_blank" rel="noopener noreferrer" class="text-purple-400 hover:underline">Ver artículo original</a></div>
+            
+            <!-- CONTENEDOR DE ANUNCIO PIE DEL ARTÍCULO -->
+            <div class="ad-container my-8 p-4 bg-slate-900/40 border border-slate-800 rounded-lg text-center text-xs text-slate-500 min-h-[250px] flex items-center justify-center">
+                <!-- Pega aquí tu código <ins class="adsbygoogle"></ins> cuando tengas tu cuenta aprobada en Google AdSense -->
+                <span>Espacio Publicitario Reservado</span>
+            </div>
+
+            <div class="mt-8 p-4 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-400">Fuente original: <a href="{seguros['url_original']}" target="_blank" rel="noopener noreferrer" class="text-purple-400 hover:text-purple-300">Leer nota original</a></div>
             <div class="mt-10 pt-6 border-t border-slate-800 flex justify-between items-center">
                 <button onclick="copiarEnlace()" class="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-4 rounded-lg transition-colors"><span id="copy-text">Copiar Enlace</span></button>
                 <a href="../index.html" class="bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold py-2 px-4 rounded-lg transition-all">Más Noticias</a>
             </div>
         </article>
     </main>
-    <footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-6 text-sm"><p>&copy; AnimePulse. Todos los derechos reservados.</p></footer>
+    <footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-6 text-sm">
+        <p>&copy; AnimePulse. Todos los derechos reservados.</p>
+        <div class="text-xs space-x-4 mt-2">
+            <a href="../politica-privacidad.html" class="hover:underline text-slate-400">Política de Privacidad</a>
+        </div>
+    </footer>
     <script>
     window.onscroll = function() {{
         const winScroll = document.body.scrollTop || document.documentElement.scrollTop;
@@ -488,9 +506,9 @@ def actualizar_index():
         url_noticia = escape(f"{CARPETA_NOTICIAS}/{item['filename']}", quote=True)
         tiempo = escape(item.get('tiempo_lectura', 'Lectura de 1 min'), quote=True)
         tarjetas_html += f"""
-        <article class="noticia-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-purple-500/50 transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between" data-categoria="{seguros['categoria']}">
-            <div><div class="h-48 overflow-hidden relative border-b border-slate-800"><img src="{seguros['imagen_url']}" alt="{seguros['titulo_seo']}" loading="lazy" class="w-full h-full object-cover"><span class="absolute top-3 left-3 bg-purple-600/90 text-white px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider">{seguros['categoria']}</span></div>
-            <div class="p-5"><span class="text-xs text-slate-400 block mb-2">{seguros['fecha_formateada']} • {tiempo}</span><h2 class="text-lg font-bold text-white mb-2 line-clamp-2 hover:text-purple-400 transition-colors"><a href="{url_noticia}" class="titulo-noticia">{seguros['titulo_seo']}</a></h2><p class="descripcion-noticia text-xs text-slate-400 line-clamp-2">{seguros['meta_descripcion']}</p></div></div>
+        <article class="noticia-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-purple-500/50 transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between">
+            <div><div class="h-48 overflow-hidden relative border-b border-slate-800"><img src="{seguros['imagen_url']}" alt="{seguros['titulo_seo']}" loading="lazy" class="w-full h-full object-cover"></div>
+            <div class="p-5"><span class="text-xs text-slate-400 block mb-2">{seguros['fecha_formateada']} • {tiempo}</span><h2 class="text-lg font-bold text-white mb-2 line-clamp-2 hover:text-purple-400 transition-colors">{seguros['titulo_seo']}</h2><p class="text-xs text-slate-400 line-clamp-2">{seguros['meta_descripcion']}</p></div>
             <div class="px-5 pb-5 pt-0 mt-auto"><a href="{url_noticia}" class="text-xs font-bold text-purple-400 hover:text-purple-300 inline-flex items-center gap-1">Leer artículo →</a></div>
         </article>
         """
@@ -498,10 +516,11 @@ def actualizar_index():
     dominio_html = escape(DOMINIO_BASE, quote=True)
     placeholder_html = escape(IMAGEN_PLACEHOLDER, quote=True)
     index_html = f"""<!DOCTYPE html>
-<html lang="es" class="dark"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AnimePulse - Noticias de Anime & Manga al Instante</title><meta name="description" content="Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga."><link rel="canonical" href="{dominio_html}"><link rel="icon" href="/favicon.ico"><meta property="og:type" content="website"><meta property="og:title" content="AnimePulse - Noticias de Anime & Manga al Instante"><meta property="og:description" content="Últimas novedades, estrenos y tendencias del mundo del anime y manga."><meta property="og:url" content="{dominio_html}"><meta property="og:site_name" content="AnimePulse"><meta property="og:image" content="{placeholder_html}"><script src="https://cdn.tailwindcss.com"></script><script src="assets/main.js" defer></script><style>.oculta-busqueda, .oculta-categoria, .oculta-paginacion {{ display: none !important; }}</style></head>
-<body class="bg-slate-950 text-slate-200 font-sans min-h-screen flex flex-col antialiased"><header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40"><div class="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row justify-between items-center gap-4"><a href="index.html" class="text-3xl font-black bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">ANIME<span class="text-white">PULSE</span></a><div class="relative w-full sm:w-72"><input type="text" id="buscador" onkeyup="ejecutarFiltro()" placeholder="Buscar por título o descripción..." aria-label="Buscar noticias" class="w-full bg-slate-950 text-slate-200 text-sm pl-4 pr-4 py-2 rounded-lg border border-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"></div></div></header>
-<section class="bg-gradient-to-b from-purple-900/20 to-transparent border-b border-slate-800/50 py-10 px-4 text-center"><div class="max-w-4xl mx-auto"><h1 class="text-3xl md:text-5xl font-black text-white mb-3">Noticias de Anime & Manga</h1><p class="text-slate-400 text-sm md:text-base mb-6">Tu portal con las últimas novedades, estrenos y tendencias del mundo del anime y manga.</p><div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto"><button onclick="filtrarPorCategoria('TODAS')" data-categoria="TODAS" class="chip-categoria bg-purple-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">TODAS</button><button onclick="filtrarPorCategoria('SHONEN')" data-categoria="SHONEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">SHONEN</button><button onclick="filtrarPorCategoria('SEINEN')" data-categoria="SEINEN" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">SEINEN</button><button onclick="filtrarPorCategoria('MANGA')" data-categoria="MANGA" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">MANGA</button><button onclick="filtrarPorCategoria('PELÍCULAS')" data-categoria="PELÍCULAS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">PELÍCULAS</button><button onclick="filtrarPorCategoria('ESTRENOS')" data-categoria="ESTRENOS" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">ESTRENOS</button><button onclick="filtrarPorCategoria('INDUSTRIA')" data-categoria="INDUSTRIA" class="chip-categoria bg-slate-800 text-slate-400 text-xs font-bold px-3 py-1.5 rounded-full">INDUSTRIA</button></div></div></section>
-<main class="max-w-6xl mx-auto my-10 px-4 flex-grow w-full"><div id="grid-noticias" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{tarjetas_html}</div><div id="no-resultados" class="hidden text-center py-16"><p class="text-slate-400 text-lg font-semibold" role="status">No se encontraron noticias que coincidan con la búsqueda.</p></div><div class="text-center mt-10"><button id="btn-cargar-mas" type="button" onclick="cargarMasNoticias()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-lg shadow-lg">Cargar más noticias</button></div></main><footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-8 text-sm mt-auto"><p>&copy; {datetime.now().year} AnimePulse. Todos los derechos reservados.</p></footer></body></html>"""
+<html lang="es" class="dark"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AnimePulse - Noticias de Anime & Manga al Instante</title><meta name="description" content="Las noticias de anime, manga, películas y videojuegos más recientes. AnimePulse te mantiene actualizado con contenido optimizado para SEO."><meta property="og:type" content="website"><meta property="og:title" content="AnimePulse - Noticias de Anime & Manga"><meta property="og:description" content="Descubre las últimas noticias sobre anime, manga y entretenimiento otaku."><meta property="og:image" content="{placeholder_html}"><meta property="og:url" content="{dominio_html}"><link rel="canonical" href="{dominio_html}"><link rel="icon" href="/favicon.ico"><script src="https://cdn.tailwindcss.com"></script><style>@keyframes fadeIn{{from{{opacity:0}}to{{opacity:1}}}}body{{animation:fadeIn .5s ease-in}}</style></head>
+<body class="bg-slate-950 text-slate-200 font-sans min-h-screen flex flex-col antialiased"><header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40"><div class="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center"><a href="index.html" class="text-2xl font-black bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">ANIME<span class="text-white">PULSE</span></a><nav class="text-xs space-x-4 text-slate-400"><a href="politica-privacidad.html" class="hover:text-white transition-colors">Privacidad</a></nav></div></header>
+<section class="bg-gradient-to-b from-purple-900/20 to-transparent border-b border-slate-800/50 py-10 px-4 text-center"><div class="max-w-4xl mx-auto"><h1 class="text-3xl md:text-5xl font-black text-white mb-2">Noticias de Anime & Manga</h1><p class="text-slate-400 text-sm md:text-base">Actualizado en tiempo real • Contenido optimizado para SEO</p></div></section>
+<main class="max-w-6xl mx-auto my-10 px-4 flex-grow w-full"><div id="grid-noticias" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{tarjetas_html}</div><div id="no-resultados" class="hidden text-center py-16"><p class="text-slate-400 text-lg font-semibold" role="status">No se encontraron noticias que coincidan con la búsqueda.</p></div></main>
+<footer class="bg-slate-900 border-t border-slate-800 text-slate-400 text-center py-6 text-sm space-y-2"><p>&copy; 2026 AnimePulse. Todos los derechos reservados.</p><div class="text-xs space-x-4"><a href="politica-privacidad.html" class="hover:underline">Política de Privacidad</a></div></footer></body></html>"""
     with open("index.html", "w", encoding="utf-8") as archivo:
         archivo.write(index_html)
 
